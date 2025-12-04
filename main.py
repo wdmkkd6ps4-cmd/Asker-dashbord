@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
+#https://wdmkkd6ps4-cmd.github.io/Asker-dashbord/
+
 # Sidekonfigurasjon
 st.set_page_config(page_title="Kø og forsinkelser - Asker", layout="wide")
 
