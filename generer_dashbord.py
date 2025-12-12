@@ -164,9 +164,6 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
             "tog": [round(x, 2) if pd.notna(x) else None for x in df_s["tog"].tolist()]
         }
 
-    # QGIS Cloud kart-URL
-    kart_url = "https://qgiscloud.com/jaleas/Asker_sentrum_cloud/?l=Til%20Asker%20sentrum%20Morgen%2CFra%20Asker%20sentrum%20Ettermiddag!%2CGjennomfart%20Asker%20Syd-Nord%20uE18!%2CGjennomfart%20Asker%20Syd-Nord%20!%2CGjennomfart%20Asker%20Syd-Vest%20!%2CGjennomfart%20Asker%20Syd-Vest%20uE18!%2CKart%20over%20koer!%2CAsker%20sentrum%5B43%5D%2CSoner%20Syd%20Vest%20og%20Nord%5B78%5D!%2CGrey&t=Asker_sentrum_cloud&e=1148232%2C8344108%2C1180532%2C8368683"
-
     html = f'''<!DOCTYPE html>
 <html lang="no">
 <head>
@@ -276,36 +273,24 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
             margin-bottom: 15px;
             color: #2c5f7c;
         }}
-        .kart-container {{
-            background: white;
+        .kart-thumbnail {{
+            width: 300px;
+            border: 2px solid #2c5f7c;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            overflow: hidden;
+            cursor: pointer;
+            transition: transform 0.2s;
         }}
-        .kart-container iframe {{
-            width: 100%;
-            height: 700px;
-            border: none;
-            display: block;
-        }}
-        .kart-info {{
-            padding: 20px;
-            background: #f9f9f9;
-            border-top: 1px solid #eee;
-        }}
-        .kart-info h3 {{
-            margin-bottom: 10px;
-            color: #2c5f7c;
+        .kart-thumbnail:hover {{
+            transform: scale(1.02);
         }}
         .kart-button {{
             display: inline-block;
             background-color: #2c5f7c;
             color: white;
-            padding: 10px 20px;
+            padding: 12px 24px;
             text-decoration: none;
             border-radius: 4px;
             margin-top: 15px;
-            font-size: 14px;
         }}
         .kart-button:hover {{
             background-color: #1e4a5f;
@@ -333,9 +318,6 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
             }}
             .home-grid {{
                 grid-template-columns: 1fr;
-            }}
-            .kart-container iframe {{
-                height: 500px;
             }}
         }}
     </style>
@@ -452,30 +434,29 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
 
             <!-- KART -->
             <div class="page" id="page-kart">
-                <h2 style="margin-bottom: 20px;">Kart - Asker sentrum</h2>
+                <h2>Kart - Asker sentrum</h2>
+                <p style="margin: 20px 0;">Interaktivt kart som viser trafikkmønstre i Asker sentrum.</p>
 
-                <div class="kart-container">
-                    <iframe 
-                        src="{kart_url}"
-                        allowfullscreen
-                        loading="lazy">
-                    </iframe>
+                <a href="https://qgiscloud.com/jaleas/Asker_sentrum_cloud/?l=Til%20Asker%20sentrum%20Morgen%2CFra%20Asker%20sentrum%20Ettermiddag!%2CGjennomfart%20Asker%20Syd-Nord%20uE18!%2CGjennomfart%20Asker%20Syd-Nord%20!%2CGjennomfart%20Asker%20Syd-Vest%20!%2CGjennomfart%20Asker%20Syd-Vest%20uE18!%2CKart%20over%20koer!%2CAsker%20sentrum%5B43%5D%2CSoner%20Syd%20Vest%20og%20Nord%5B78%5D!%2CGrey&t=Asker_sentrum_cloud&e=1148232%2C8344108%2C1180532%2C8368683" target="_blank">
+                    <img src="https://raw.githubusercontent.com/wdmkkd6ps4-cmd/Asker-dashbord/main/data/kart_thumbnail.png" class="kart-thumbnail" alt="Kart over Asker">
+                </a>
 
-                    <div class="kart-info">
-                        <h3>Tilgjengelige lag i kartet:</h3>
-                        <ul style="margin-top: 10px; margin-left: 20px; columns: 2;">
-                            <li>Til Asker sentrum (Morgen)</li>
-                            <li>Fra Asker sentrum (Ettermiddag)</li>
-                            <li>Gjennomfartstrafikk Syd-Nord</li>
-                            <li>Gjennomfartstrafikk Syd-Vest</li>
-                            <li>Oversiktskart over køer</li>
-                            <li>Soner og grids</li>
-                        </ul>
+                <br>
 
-                        <a href="{kart_url}" target="_blank" class="kart-button">
-                            🔗 Åpne kartet i ny fane
-                        </a>
-                    </div>
+                <a href="https://qgiscloud.com/jaleas/Asker_sentrum_cloud/?l=Til%20Asker%20sentrum%20Morgen%2CFra%20Asker%20sentrum%20Ettermiddag!%2CGjennomfart%20Asker%20Syd-Nord%20uE18!%2CGjennomfart%20Asker%20Syd-Nord%20!%2CGjennomfart%20Asker%20Syd-Vest%20!%2CGjennomfart%20Asker%20Syd-Vest%20uE18!%2CKart%20over%20koer!%2CAsker%20sentrum%5B43%5D%2CSoner%20Syd%20Vest%20og%20Nord%5B78%5D!%2CGrey&t=Asker_sentrum_cloud&e=1148232%2C8344108%2C1180532%2C8368683" target="_blank" class="kart-button">
+                    🗺️ Åpne interaktivt kart i ny fane
+                </a>
+
+                <div style="margin-top: 30px;">
+                    <h3>Tilgjengelige lag i kartet:</h3>
+                    <ul style="margin-top: 10px; margin-left: 20px;">
+                        <li>Til Asker sentrum (Morgen)</li>
+                        <li>Fra Asker sentrum (Ettermiddag)</li>
+                        <li>Gjennomfartstrafikk Syd-Nord</li>
+                        <li>Gjennomfartstrafikk Syd-Vest</li>
+                        <li>Oversiktskart over køer</li>
+                        <li>Soner og grids</li>
+                    </ul>
                 </div>
             </div>
         </div>
