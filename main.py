@@ -1,6 +1,20 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import clickhouse_connect
+
+# === CLICKHOUSE EKSPORT (kjør separat for å oppdatere CSV) ===
+client = clickhouse_connect.get_client(host='localhost', port=8123, database='asker')
+df = client.query_df(
+    "SELECT dato, klokkeslett, stop_name, tid_dag, faktisk_tid, avstand, min_tid, ko_min_km, forsinkelser, bil FROM `3-05 til dashbord ko`")
+df.to_csv("data/inndata_asker_ko.csv", sep=";", decimal=",", index=False, encoding="utf-8-sig")
+print(f"Eksportert {len(df)} rader (kødata)")
+
+# Eksport av reisestatistikk
+df_reiser = client.query_df(
+    "SELECT ID, kvartal, bil, buss, sykkel, gange, tog FROM `3-05 til dashbord reiser`")
+df_reiser.to_csv("data/inndata_asker_reiser.csv", sep=";", decimal=",", index=False, encoding="utf-8-sig")
+print(f"Eksportert {len(df_reiser)} rader (reisestatistikk)")
 
 # Sidekonfigurasjon
 st.set_page_config(page_title="Mobilitetsdashbord - Asker", layout="wide")
@@ -22,7 +36,6 @@ st.markdown("""
     [data-testid="stSidebar"] .stRadio > label {
         font-weight: bold;
     }
-    /* Tab styling */
     .stTabs [data-baseweb="tab-list"] {
         gap: 0px;
         background-color: #6b7b8c;
@@ -52,32 +65,55 @@ def load_forsinkelser_data():
         encoding="utf-8-sig"
     )
 
-    # Rensk kolonnenavn for eventuelle usynlige tegn
+    # Rensk kolonnenavn
     df.columns = df.columns.str.strip().str.replace('\ufeff', '')
-
-    # Normaliser kolonnenavn til lowercase
     df.columns = df.columns.str.lower()
 
-    # Konverter dato - håndter både ISO-format og norsk format
+    # Konverter dato
     if df["dato"].dtype == 'object' and df["dato"].str.contains(",").any():
-        # Norsk format: 16,10,2025
         df["dato"] = df["dato"].str.replace(",", ".")
         df["dato"] = pd.to_datetime(df["dato"], format="%d.%m.%Y")
     else:
-        # ISO format: 2025-10-16
         df["dato"] = pd.to_datetime(df["dato"])
 
-    # Håndter tomme verdier i Forsinkelser
+    # Konverter klokkeslett til streng (HH:MM)
+    if "klokkeslett" in df.columns:
+        df["klokkeslett"] = pd.to_datetime(df["klokkeslett"].astype(str)).dt.strftime("%H:%M")
+
+    # Håndter tomme verdier
     df["forsinkelser"] = pd.to_numeric(df["forsinkelser"], errors="coerce")
+    df["ko_min_km"] = pd.to_numeric(df["ko_min_km"], errors="coerce")
+    if "bil" in df.columns:
+        df["bil"] = pd.to_numeric(df["bil"], errors="coerce")
 
     return df
 
 
 @st.cache_data
 def load_reisestatistikk_data():
-    """Last inn reisestatistikk-data (placeholder)"""
-    # TODO: Implementer når CSV-fil er klar
-    return None
+    """Last inn og preprosesser reisestatistikk-data"""
+    df = pd.read_csv(
+        "data/inndata_asker_reiser.csv",
+        sep=";",
+        decimal=",",
+        encoding="utf-8-sig"
+    )
+
+    # Rensk kolonnenavn
+    df.columns = df.columns.str.strip().str.replace('\ufeff', '')
+
+    # Konverter numeriske kolonner
+    for col in ["bil", "buss", "sykkel", "gange", "tog"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Lag sorteringsnøkkel for kvartal (YYYY-Q -> YYYYQ for sortering)
+    df["kvartal_sort"] = df["kvartal"].str.replace("-", "").astype(int)
+
+    # Sorter kronologisk
+    df = df.sort_values("kvartal_sort").reset_index(drop=True)
+
+    return df
 
 
 # ========== PAGE: FORSINKELSER ==========
@@ -85,7 +121,6 @@ def load_reisestatistikk_data():
 def page_forsinkelser():
     """Forsinkelser-siden"""
 
-    # Last data
     try:
         df = load_forsinkelser_data()
     except FileNotFoundError:
@@ -108,12 +143,22 @@ def page_forsinkelser():
 
         st.markdown("---")
 
-        # Radio buttons for valg av diagram (Kø / Forsinkelser)
+        # Radio buttons for visning (Kø / Forsinkelser)
         diagram_valg = st.radio(
             "Velg visning:",
             ["Kø", "Forsinkelser buss"],
             index=0,
             key="forsinkelser_diagram"
+        )
+
+        st.markdown("---")
+
+        # Radio buttons for x-akse (Over dato / Over klokkeslett)
+        x_akse_valg = st.radio(
+            "Vis over:",
+            ["Over dato", "Over klokkeslett"],
+            index=0,
+            key="forsinkelser_x_akse"
         )
 
         st.markdown("---")
@@ -128,7 +173,7 @@ def page_forsinkelser():
 
         st.markdown("---")
 
-        # Dato-velger for startdato
+        # Dato-velger for startdato (kun relevant for "Over dato")
         min_dato = df["dato"].min().date()
         max_dato = df["dato"].max().date()
         start_dato = st.date_input(
@@ -136,68 +181,118 @@ def page_forsinkelser():
             value=min_dato,
             min_value=min_dato,
             max_value=max_dato,
-            key="forsinkelser_startdato"
+            key="forsinkelser_startdato",
+            disabled=(x_akse_valg == "Over klokkeslett")
         )
 
-    # Filtrer på tid først
-    df_tid = df[df["tid"] == tid_valg]
+    # Filtrer på tid
+    df_tid = df[df["tid_dag"] == tid_valg].copy()
 
-    # Filtrer på startdato
-    df_tid = df_tid[df_tid["dato"].dt.date >= start_dato]
+    # Filtrer på startdato (kun for "Over dato")
+    if x_akse_valg == "Over dato":
+        df_tid = df_tid[df_tid["dato"].dt.date >= start_dato]
 
-    # Lag dato-streng for x-aksen
-    df_tid = df_tid.copy()
-    df_tid["dato_str"] = df_tid["dato"].dt.strftime("%d.%m.%Y")
-
-    # Filtrer og aggreger data
-    if len(valgte_strekninger) == 0:
-        # Ingen valgt = gjennomsnitt over alle strekninger
-        df_filtered = df_tid.groupby(["dato", "dato_str"]).agg({
-            "ko_min_km": "mean",
-            "forsinkelser": "mean"
-        }).reset_index()
-        df_filtered["strekning"] = "Alle strekninger"
-        tittel_suffix = f"alle strekninger ({tid_valg.lower()})"
-    else:
-        # Filtrer på valgte strekninger
-        df_filtered = df_tid[df_tid["stop_name"].isin(valgte_strekninger)].groupby(
-            ["dato", "dato_str", "stop_name"]
-        ).agg({
-            "ko_min_km": "mean",
-            "forsinkelser": "mean"
-        }).reset_index()
-        df_filtered = df_filtered.rename(columns={"stop_name": "strekning"})
-        tittel_suffix = f"utvalgte strekninger ({tid_valg.lower()})"
-
-    # Sorter etter dato
-    df_filtered = df_filtered.sort_values("dato").reset_index(drop=True)
-
-    # Lag diagram basert på valg
+    # Velg y-kolonne
     if diagram_valg == "Kø":
         y_col = "ko_min_km"
         y_label = "Kø (min/km)"
-        tittel = f"Kø - {tittel_suffix}"
     else:
         y_col = "forsinkelser"
-        y_label = "Forsinkelser"
-        tittel = f"Forsinkelser buss - {tittel_suffix}"
+        y_label = "Forsinkelser (min)"
 
-    # Plotly linjediagram med dato som kategorisk x-akse
-    fig = px.line(
-        df_filtered,
-        x="dato_str",
-        y=y_col,
-        color="strekning",
-        title=tittel,
-        labels={"dato_str": "Dato", y_col: y_label, "strekning": "Strekning"}
-    )
+    # Filtrer bort rader uten verdi i y-kolonnen
+    df_tid = df_tid[df_tid[y_col].notna()]
 
-    fig.update_layout(
-        xaxis_title="Dato",
-        yaxis_title=y_label,
-        hovermode="x unified",
-        xaxis_tickangle=-45
-    )
+    if len(df_tid) == 0:
+        st.warning("Ingen data tilgjengelig for valgte filtre.")
+        return
+
+    # ===== OVER DATO =====
+    if x_akse_valg == "Over dato":
+        df_tid["dato_str"] = df_tid["dato"].dt.strftime("%d.%m.%Y")
+
+        if len(valgte_strekninger) == 0:
+            # Vektet gjennomsnitt over alle strekninger og klokkeslett per dato
+            def weighted_avg(group):
+                mask = group[y_col].notna() & group["bil"].notna()
+                if mask.sum() == 0:
+                    return pd.NA
+                return (group.loc[mask, y_col] * group.loc[mask, "bil"]).sum() / group.loc[mask, "bil"].sum()
+
+            df_plot = df_tid.groupby(["dato", "dato_str"]).apply(weighted_avg).reset_index(name=y_col)
+            df_plot["strekning"] = "Alle strekninger"
+            tittel_suffix = f"alle strekninger ({tid_valg.lower()})"
+        else:
+            # Median over klokkeslett per dato og strekning
+            df_plot = df_tid[df_tid["stop_name"].isin(valgte_strekninger)].groupby(
+                ["dato", "dato_str", "stop_name"]
+            ).agg({
+                y_col: "median"
+            }).reset_index()
+            df_plot = df_plot.rename(columns={"stop_name": "strekning"})
+            tittel_suffix = f"utvalgte strekninger ({tid_valg.lower()})"
+
+        df_plot = df_plot.sort_values("dato").reset_index(drop=True)
+        tittel = f"{diagram_valg} - {tittel_suffix}"
+
+        fig = px.line(
+            df_plot,
+            x="dato_str",
+            y=y_col,
+            color="strekning",
+            title=tittel,
+            labels={"dato_str": "Dato", y_col: y_label, "strekning": "Strekning"}
+        )
+        fig.update_layout(
+            xaxis_title="Dato",
+            yaxis_title=y_label,
+            hovermode="x unified",
+            xaxis_tickangle=-45,
+            yaxis_rangemode="tozero"
+        )
+
+    # ===== OVER KLOKKESLETT =====
+    else:
+        if len(valgte_strekninger) == 0:
+            # Vektet gjennomsnitt over alle strekninger og datoer per klokkeslett
+            def weighted_avg(group):
+                mask = group[y_col].notna() & group["bil"].notna()
+                if mask.sum() == 0:
+                    return pd.NA
+                return (group.loc[mask, y_col] * group.loc[mask, "bil"]).sum() / group.loc[mask, "bil"].sum()
+
+            df_plot = df_tid.groupby("klokkeslett").apply(weighted_avg).reset_index(name=y_col)
+            df_plot["strekning"] = "Alle strekninger"
+            tittel_suffix = f"alle strekninger ({tid_valg.lower()})"
+        else:
+            # Median over datoer per klokkeslett og strekning
+            df_plot = df_tid[df_tid["stop_name"].isin(valgte_strekninger)].groupby(
+                ["klokkeslett", "stop_name"]
+            ).agg({
+                y_col: "median"
+            }).reset_index()
+            df_plot = df_plot.rename(columns={"stop_name": "strekning"})
+            tittel_suffix = f"utvalgte strekninger ({tid_valg.lower()})"
+
+        # Sorter klokkeslett
+        df_plot = df_plot.sort_values("klokkeslett").reset_index(drop=True)
+        tittel = f"{diagram_valg} - {tittel_suffix}"
+
+        fig = px.bar(
+            df_plot,
+            x="klokkeslett",
+            y=y_col,
+            color="strekning",
+            barmode="group",
+            title=tittel,
+            labels={"klokkeslett": "Klokkeslett", y_col: y_label, "strekning": "Strekning"}
+        )
+        fig.update_layout(
+            xaxis_title="Klokkeslett",
+            yaxis_title=y_label,
+            hovermode="x unified",
+            yaxis_rangemode="tozero"
+        )
 
     # Vis diagram
     st.plotly_chart(fig, use_container_width=True)
@@ -206,10 +301,14 @@ def page_forsinkelser():
     st.markdown("---")
     col1, col2 = st.columns([1, 4])
     with col1:
-        # Forbered eksportdata
-        export_df = df_filtered[["dato_str", "strekning", y_col]].rename(
-            columns={"dato_str": "Dato", "strekning": "Strekning", y_col: y_label}
-        )
+        if x_akse_valg == "Over dato":
+            export_df = df_plot[["dato_str", "strekning", y_col]].rename(
+                columns={"dato_str": "Dato", "strekning": "Strekning", y_col: y_label}
+            )
+        else:
+            export_df = df_plot[["klokkeslett", "strekning", y_col]].rename(
+                columns={"klokkeslett": "Klokkeslett", "strekning": "Strekning", y_col: y_label}
+            )
 
         csv = export_df.to_csv(index=False, sep=";", decimal=",").encode("utf-8")
         st.download_button(
@@ -221,29 +320,156 @@ def page_forsinkelser():
         )
 
 
+# ========== PAGE: KART ==========
+
+def page_kart():
+    """Kartside med QGIS Cloud-kart"""
+
+    st.header("Kart - Asker sentrum")
+
+    qgis_url = "https://qgiscloud.com/jaleas/Asker_sentrum_cloud/?l=Til%20Asker%20sentrum%20Morgen%2CFra%20Asker%20sentrum%20Ettermiddag!%2CGjennomfart%20Asker%20Syd-Nord%20uE18!%2CGjennomfart%20Asker%20Syd-Nord%20!%2CGjennomfart%20Asker%20Syd-Vest%20!%2CGjennomfart%20Asker%20Syd-Vest%20uE18!%2Cshapefile_nor_grids_norway_grids!%2CAsker%20sentrum%5B43%5D%2CSoner%20Syd%20Vest%20og%20Nord%5B78%5D!%2CGrey&t=Asker_sentrum_cloud&e=1083531%2C8299266%2C1245033%2C8422138"
+
+    st.markdown("Interaktivt kart som viser trafikkmønstre i Asker sentrum.")
+
+    # Vis kartbilde som klikkbar thumbnail (mindre størrelse)
+    try:
+        import base64
+        with open("data/kart_thumbnail.png", "rb") as f:
+            img_data = base64.b64encode(f.read()).decode()
+
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col1:
+            st.markdown(
+                f'<a href="{qgis_url}" target="_blank">'
+                f'<img src="data:image/png;base64,{img_data}" style="width:100%; border:2px solid #2c5f7c; border-radius:8px; cursor:pointer;">'
+                f'</a>',
+                unsafe_allow_html=True
+            )
+    except:
+        st.info("Kartforhåndsvisning ikke tilgjengelig")
+
+    st.link_button("🗺️ Åpne interaktivt kart i ny fane", qgis_url, use_container_width=True)
+
+    st.markdown("---")
+    st.markdown("""
+    **Tilgjengelige lag i kartet:**
+    - Til Asker sentrum (Morgen)
+    - Fra Asker sentrum (Ettermiddag)
+    - Gjennomfartstrafikk Syd-Nord
+    - Gjennomfartstrafikk Syd-Vest
+    - Soner og grids
+    """)
+
+
 # ========== PAGE: REISESTATISTIKK ==========
 
 def page_reisestatistikk():
-    """Reisestatistikk-siden (placeholder)"""
+    """Reisestatistikk-siden med linjediagram over kvartal"""
 
-    # Placeholder sidebar
+    try:
+        df = load_reisestatistikk_data()
+    except FileNotFoundError:
+        st.error("Kunne ikke finne datafil: data/inndata_asker_reiser.csv")
+        return
+
+    # Hent unike ID-verdier dynamisk fra dataene
+    alle_id = sorted(df["ID"].unique().tolist())
+
+    # Finn default-indeks for "Til Asker sentrum"
+    default_id = "Til Asker sentrum"
+    if default_id in alle_id:
+        default_index = alle_id.index(default_id)
+    else:
+        default_index = 0
+
+    # Sidebar
     with st.sidebar:
-        st.markdown('<div class="sidebar-header">Velg filtre</div>', unsafe_allow_html=True)
-        st.write("*Filtre kommer når data er tilgjengelig*")
+        st.markdown('<div class="sidebar-header">Velg strekning</div>', unsafe_allow_html=True)
 
-    st.header("Reisestatistikk")
+        valgt_id = st.selectbox(
+            "Strekning",
+            options=alle_id,
+            index=default_index,
+            key="reisestatistikk_id"
+        )
 
-    st.info("""
-    🚧 **Denne siden er under utvikling**
+    # Filtrer data på valgt ID
+    df_filtered = df[df["ID"] == valgt_id].copy()
 
-    Her kommer reisestatistikk basert på data fra CSV-fil.
+    if len(df_filtered) == 0:
+        st.warning("Ingen data tilgjengelig for valgt strekning.")
+        return
 
-    Planlagte funksjoner:
-    - Antall reiser per dag/uke/måned
-    - Reisemønster fordelt på transportmiddel
-    - Sammenligning mellom områder
-    - Trendanalyse over tid
-    """)
+    # Forbered data for plotting - smelt til lang format
+    transportmidler = ["bil", "buss", "sykkel", "gange", "tog"]
+    df_plot = df_filtered.melt(
+        id_vars=["kvartal", "kvartal_sort"],
+        value_vars=transportmidler,
+        var_name="Transportmiddel",
+        value_name="Antall reiser"
+    )
+
+    # Sorter etter kvartal
+    df_plot = df_plot.sort_values("kvartal_sort").reset_index(drop=True)
+
+    # Lag penere navn på transportmidler (stor forbokstav)
+    df_plot["Transportmiddel"] = df_plot["Transportmiddel"].str.capitalize()
+
+    # Definer farger for transportmidler
+    farger = {
+        "Bil": "#636EFA",
+        "Buss": "#EF553B",
+        "Sykkel": "#00CC96",
+        "Gange": "#AB63FA",
+        "Tog": "#FFA15A"
+    }
+
+    # Lag linjediagram
+    fig = px.line(
+        df_plot,
+        x="kvartal",
+        y="Antall reiser",
+        color="Transportmiddel",
+        title=f"Reisestatistikk - {valgt_id} (1000 reiser per kvartal)",
+        labels={"kvartal": "Kvartal", "Antall reiser": "Antall reiser (1000 per kvartal)"},
+        color_discrete_map=farger
+    )
+
+    fig.update_layout(
+        xaxis_title="Kvartal",
+        yaxis_title="Antall reiser (1000 per kvartal)",
+        hovermode="x unified",
+        xaxis_tickangle=-45,
+        yaxis_rangemode="tozero",
+        legend_title="Transportmiddel",
+        xaxis_type="category"
+    )
+
+    # Vis diagram
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Eksportmulighet
+    st.markdown("---")
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        export_df = df_filtered[["kvartal"] + transportmidler].rename(
+            columns={
+                "kvartal": "Kvartal",
+                "bil": "Bil",
+                "buss": "Buss",
+                "sykkel": "Sykkel",
+                "gange": "Gange",
+                "tog": "Tog"
+            }
+        )
+        csv = export_df.to_csv(index=False, sep=";", decimal=",").encode("utf-8")
+        st.download_button(
+            label="📥 Eksporter CSV",
+            data=csv,
+            file_name=f"eksport_reisestatistikk_{valgt_id.lower().replace(' ', '_')}.csv",
+            mime="text/csv",
+            key="reisestatistikk_eksport"
+        )
 
 
 # ========== PAGE: FORSIDE ==========
@@ -263,7 +489,7 @@ def page_forside():
 
     st.markdown("---")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         st.subheader("📊 Forsinkelser")
@@ -273,25 +499,36 @@ def page_forside():
         - Køindeks (min/km) basert på trafikkdata
         - Forsinkelser for buss
         - Filtrer på tid (morgen/ettermiddag) og strekning
+        - Vis over dato eller klokkeslett
         """)
 
     with col2:
+        st.subheader("🗺️ Kart")
+        st.markdown("""
+        Interaktivt kart over Asker sentrum.
+
+        - Trafikkmønstre til/fra sentrum
+        - Gjennomfartstrafikk
+        - Soner og grids
+        """)
+
+    with col3:
         st.subheader("🚌 Reisestatistikk")
         st.markdown("""
         Statistikk over reiser og reisemønstre.
 
-        - *Kommer snart*
+        - Antall reiser per kvartal
+        - Fordelt på transportmiddel
+        - Filtrer på strekning
         """)
 
 
 # ========== MAIN APP ==========
 
-# Initialiser session state for navigasjon
 if "current_page" not in st.session_state:
     st.session_state.current_page = "Hjem"
 
-# Navigasjon øverst (stylet som tabs)
-col1, col2, col3, col4 = st.columns([1, 1, 1, 3])
+col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 2])
 with col1:
     if st.button("Hjem", use_container_width=True,
                  type="primary" if st.session_state.current_page == "Hjem" else "secondary"):
@@ -307,13 +544,19 @@ with col3:
                  type="primary" if st.session_state.current_page == "Reisestatistikk" else "secondary"):
         st.session_state.current_page = "Reisestatistikk"
         st.rerun()
+with col4:
+    if st.button("Kart", use_container_width=True,
+                 type="primary" if st.session_state.current_page == "Kart" else "secondary"):
+        st.session_state.current_page = "Kart"
+        st.rerun()
 
 st.markdown("---")
 
-# Vis riktig side basert på valg
 if st.session_state.current_page == "Hjem":
     page_forside()
 elif st.session_state.current_page == "Forsinkelser":
     page_forsinkelser()
+elif st.session_state.current_page == "Kart":
+    page_kart()
 else:
     page_reisestatistikk()
