@@ -284,45 +284,28 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
         }}
         .kart-container iframe {{
             width: 100%;
-            height: calc(100vh - 250px);
-            min-height: 600px;
+            height: 700px;
             border: none;
             display: block;
         }}
         .kart-info {{
-            padding: 12px 20px;
+            padding: 20px;
             background: #f9f9f9;
             border-top: 1px solid #eee;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 10px;
         }}
-        .kart-info h4 {{
-            margin: 0;
+        .kart-info h3 {{
+            margin-bottom: 10px;
             color: #2c5f7c;
-            font-size: 14px;
-        }}
-        .kart-info ul {{
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px 20px;
-            margin: 0;
-            padding: 0;
-            list-style: none;
-            font-size: 13px;
-            color: #555;
         }}
         .kart-button {{
             display: inline-block;
             background-color: #2c5f7c;
             color: white;
-            padding: 8px 16px;
+            padding: 10px 20px;
             text-decoration: none;
             border-radius: 4px;
-            font-size: 13px;
-            white-space: nowrap;
+            margin-top: 15px;
+            font-size: 14px;
         }}
         .kart-button:hover {{
             background-color: #1e4a5f;
@@ -352,12 +335,7 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
                 grid-template-columns: 1fr;
             }}
             .kart-container iframe {{
-                height: 70vh;
-                min-height: 400px;
-            }}
-            .kart-info {{
-                flex-direction: column;
-                align-items: flex-start;
+                height: 500px;
             }}
         }}
     </style>
@@ -474,6 +452,8 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
 
             <!-- KART -->
             <div class="page" id="page-kart">
+                <h2 style="margin-bottom: 20px;">Kart - Asker sentrum</h2>
+
                 <div class="kart-container">
                     <iframe 
                         src="{kart_url}"
@@ -482,12 +462,18 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
                     </iframe>
 
                     <div class="kart-info">
-                        <div>
-                            <h4>Lag: Til/fra sentrum · Gjennomfart Syd-Nord/Vest · Køoversikt · Soner</h4>
-                        </div>
+                        <h3>Tilgjengelige lag i kartet:</h3>
+                        <ul style="margin-top: 10px; margin-left: 20px; columns: 2;">
+                            <li>Til Asker sentrum (Morgen)</li>
+                            <li>Fra Asker sentrum (Ettermiddag)</li>
+                            <li>Gjennomfartstrafikk Syd-Nord</li>
+                            <li>Gjennomfartstrafikk Syd-Vest</li>
+                            <li>Oversiktskart over køer</li>
+                            <li>Soner og grids</li>
+                        </ul>
 
                         <a href="{kart_url}" target="_blank" class="kart-button">
-                            🔗 Åpne i ny fane
+                            🔗 Åpne kartet i ny fane
                         </a>
                     </div>
                 </div>
