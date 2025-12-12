@@ -1,20 +1,11 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import clickhouse_connect
+import os
 
-# === CLICKHOUSE EKSPORT (kjør separat for å oppdatere CSV) ===
-client = clickhouse_connect.get_client(host='localhost', port=8123, database='asker')
-df = client.query_df(
-    "SELECT dato, klokkeslett, stop_name, tid_dag, faktisk_tid, avstand, min_tid, ko_min_km, forsinkelser, bil FROM `3-05 til dashbord ko`")
-df.to_csv("data/inndata_asker_ko.csv", sep=";", decimal=",", index=False, encoding="utf-8-sig")
-print(f"Eksportert {len(df)} rader (kødata)")
-
-# Eksport av reisestatistikk
-df_reiser = client.query_df(
-    "SELECT ID, kvartal, bil, buss, sykkel, gange, tog FROM `3-05 til dashbord reiser`")
-df_reiser.to_csv("data/inndata_asker_reiser.csv", sep=";", decimal=",", index=False, encoding="utf-8-sig")
-print(f"Eksportert {len(df_reiser)} rader (reisestatistikk)")
+# Finn riktig sti til data-mappen
+# I Snowflake ligger filene relativt til appens rotmappe
+DATA_PATH = "data"
 
 # Sidekonfigurasjon
 st.set_page_config(page_title="Mobilitetsdashbord - Asker", layout="wide")
@@ -59,7 +50,7 @@ st.markdown("""
 def load_forsinkelser_data():
     """Last inn og preprosesser kødata"""
     df = pd.read_csv(
-        "data/inndata_asker_ko.csv",
+        f"{DATA_PATH}/inndata_asker_ko.csv",
         sep=";",
         decimal=",",
         encoding="utf-8-sig"
@@ -93,7 +84,7 @@ def load_forsinkelser_data():
 def load_reisestatistikk_data():
     """Last inn og preprosesser reisestatistikk-data"""
     df = pd.read_csv(
-        "data/inndata_asker_reiser.csv",
+        f"{DATA_PATH}/inndata_asker_reiser.csv",
         sep=";",
         decimal=",",
         encoding="utf-8-sig"
@@ -329,24 +320,20 @@ def page_kart():
 
     qgis_url = "https://qgiscloud.com/jaleas/Asker_sentrum_cloud/?l=Til%20Asker%20sentrum%20Morgen%2CFra%20Asker%20sentrum%20Ettermiddag!%2CGjennomfart%20Asker%20Syd-Nord%20uE18!%2CGjennomfart%20Asker%20Syd-Nord%20!%2CGjennomfart%20Asker%20Syd-Vest%20!%2CGjennomfart%20Asker%20Syd-Vest%20uE18!%2Cshapefile_nor_grids_norway_grids!%2CAsker%20sentrum%5B43%5D%2CSoner%20Syd%20Vest%20og%20Nord%5B78%5D!%2CGrey&t=Asker_sentrum_cloud&e=1083531%2C8299266%2C1245033%2C8422138"
 
+    # URL til kartbilde på GitHub
+    kart_bilde_url = "https://raw.githubusercontent.com/wdmkkd6ps4-cmd/Asker-dashbord/main/data/kart_thumbnail.png"
+
     st.markdown("Interaktivt kart som viser trafikkmønstre i Asker sentrum.")
 
     # Vis kartbilde som klikkbar thumbnail (mindre størrelse)
-    try:
-        import base64
-        with open("data/kart_thumbnail.png", "rb") as f:
-            img_data = base64.b64encode(f.read()).decode()
-
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col1:
-            st.markdown(
-                f'<a href="{qgis_url}" target="_blank">'
-                f'<img src="data:image/png;base64,{img_data}" style="width:100%; border:2px solid #2c5f7c; border-radius:8px; cursor:pointer;">'
-                f'</a>',
-                unsafe_allow_html=True
-            )
-    except:
-        st.info("Kartforhåndsvisning ikke tilgjengelig")
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        st.markdown(
+            f'<a href="{qgis_url}" target="_blank">'
+            f'<img src="{kart_bilde_url}" style="width:100%; border:2px solid #2c5f7c; border-radius:8px; cursor:pointer;">'
+            f'</a>',
+            unsafe_allow_html=True
+        )
 
     st.link_button("🗺️ Åpne interaktivt kart i ny fane", qgis_url, use_container_width=True)
 
