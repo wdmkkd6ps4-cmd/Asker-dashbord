@@ -164,8 +164,8 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
             "tog": [round(x, 2) if pd.notna(x) else None for x in df_s["tog"].tolist()]
         }
 
-    # QGIS Cloud kart-URL - sentrert på Asker sentrum, skala ca 1:80000
-    kart_url = "https://qgiscloud.com/jaleas/Asker_sentrum_cloud/?l=Til%20Asker%20sentrum%20Morgen%2CFra%20Asker%20sentrum%20Ettermiddag!%2CGjennomfart%20Asker%20Syd-Nord%20uE18!%2CGjennomfart%20Asker%20Syd-Nord%20!%2CGjennomfart%20Asker%20Syd-Vest%20!%2CGjennomfart%20Asker%20Syd-Vest%20uE18!%2CKart%20over%20koer!%2CAsker%20sentrum%5B43%5D%2CSoner%20Syd%20Vest%20og%20Nord%5B78%5D!%2CGrey&t=Asker_sentrum_cloud&e=1149000%2C8350000%2C1175000%2C8372000"
+    # QGIS Cloud kart-URL
+    kart_url = "https://qgiscloud.com/jaleas/Asker_sentrum_cloud/?l=Til%20Asker%20sentrum%20Morgen%2CFra%20Asker%20sentrum%20Ettermiddag!%2CGjennomfart%20Asker%20Syd-Nord%20uE18!%2CGjennomfart%20Asker%20Syd-Nord%20!%2CGjennomfart%20Asker%20Syd-Vest%20!%2CGjennomfart%20Asker%20Syd-Vest%20uE18!%2CKart%20over%20koer!%2CAsker%20sentrum%5B43%5D%2CSoner%20Syd%20Vest%20og%20Nord%5B78%5D!%2CGrey&t=Asker_sentrum_cloud&e=1148232%2C8344108%2C1180532%2C8368683"
 
     html = f'''<!DOCTYPE html>
 <html lang="no">
