@@ -1067,8 +1067,9 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
                 ].join(';'))
             ].join('\\n');
 
-            // Last ned fil
-            const blob = new Blob([csvContent], {{ type: 'text/csv;charset=utf-8;' }});
+            // Last ned fil med UTF-8 BOM for Excel
+            const BOM = '\\uFEFF';
+            const blob = new Blob([BOM + csvContent], {{ type: 'text/csv;charset=utf-8;' }});
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
             link.download = 'nokkeltall_reiser.csv';
