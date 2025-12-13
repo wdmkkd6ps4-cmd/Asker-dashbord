@@ -53,14 +53,46 @@ def load_and_process_nokkel_data(filepath):
     df = pd.read_csv(filepath, sep=";", decimal=",", encoding="utf-8-sig")
     df.columns = df.columns.str.strip().str.replace('\ufeff', '')
 
-    # Konverter delområder til string (fjern .0)
-    df["delomrade_fra"] = df["delomrade_fra"].astype(int).astype(str)
-    df["delomrade_til"] = df["delomrade_til"].astype(int).astype(str)
+    # Behandle delområder som string
+    df["delomrade_fra"] = df["delomrade_fra"].astype(str).str.strip()
+    df["delomrade_til"] = df["delomrade_til"].astype(str).str.strip()
 
     df["reiser"] = pd.to_numeric(df["reiser"], errors="coerce")
 
     # Lag sorteringsnøkkel for kvartal
     df["kvartal_sort"] = df["kvartal"].str.replace("-", "").astype(int)
+
+    # Beregn trend per gruppe
+    df = beregn_trend(df)
+
+    return df
+
+
+def beregn_trend(df):
+    """Beregn trend med glidende gjennomsnitt for hver kombinasjon av fra/til/tid/ukedag"""
+    from tqdm import tqdm
+
+    df = df.sort_values("kvartal_sort")
+    df["trend"] = np.nan
+
+    # Grupper på alle filtervariablene
+    grupper = list(df.groupby(["delomrade_fra", "delomrade_til", "time_of_day", "weekday_indicator"]))
+
+    for name, gruppe in tqdm(grupper, desc="Beregner trend"):
+        idx = gruppe.index
+
+        if len(gruppe) < 3:
+            df.loc[idx, "trend"] = np.nan
+            continue
+
+        y = gruppe["reiser"].values.copy()
+
+        # Glidende gjennomsnitt med vindu på 5 kvartaler (sentrert)
+        trend = pd.Series(y).rolling(window=5, center=True, min_periods=1).mean().values
+        df.loc[idx, "trend"] = trend
+
+    # Rund av trend
+    df["trend"] = df["trend"].round(2)
 
     return df
 
@@ -158,8 +190,10 @@ def prepare_nokkel_data(df):
     tider = sorted(df["time_of_day"].unique().tolist())
     kvartaler = df.sort_values("kvartal_sort")["kvartal"].unique().tolist()
 
-    # Konverter hele datasettet til liste av dicts for JavaScript
-    records = df[["delomrade_fra", "delomrade_til", "kvartal", "reiser", "time_of_day", "weekday_indicator"]].to_dict("records")
+    # Konverter hele datasettet til liste av dicts for JavaScript (inkl. trend)
+    records = df[
+        ["delomrade_fra", "delomrade_til", "kvartal", "reiser", "trend", "time_of_day", "weekday_indicator"]].to_dict(
+        "records")
 
     return {
         "records": records,
@@ -191,9 +225,9 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
 
     # Generer options for flervalg
     omrade_fra_options = '<option value="Alle" selected>Alle</option>\n' + \
-        "\n".join(f'<option value="{o}">{o}</option>' for o in nokkel_data["omrader_fra"])
+                         "\n".join(f'<option value="{o}">{o}</option>' for o in nokkel_data["omrader_fra"])
     omrade_til_options = '<option value="Alle" selected>Alle</option>\n' + \
-        "\n".join(f'<option value="{o}">{o}</option>' for o in nokkel_data["omrader_til"])
+                         "\n".join(f'<option value="{o}">{o}</option>' for o in nokkel_data["omrader_til"])
 
     # Generer radiobuttons for tid på dagen
     tid_radios = '<label><input type="radio" name="tid-nokkel" value="Alle" checked onchange="updateNokkelChart()"> Alle</label>\n'
@@ -296,6 +330,74 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             margin-bottom: 20px;
+        }}
+        .sankey-btn {{
+            background-color: #2c5f7c;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-top: 10px;
+        }}
+        .sankey-btn:hover {{
+            background-color: #1e4a5f;
+        }}
+        .modal {{
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }}
+        .modal-content {{
+            background-color: white;
+            margin: 2% auto;
+            padding: 20px;
+            border-radius: 8px;
+            width: 95%;
+            max-width: 1100px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }}
+        .modal-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+        }}
+        .modal-header h2 {{
+            margin: 0;
+            color: #2c5f7c;
+        }}
+        .modal-close {{
+            font-size: 28px;
+            cursor: pointer;
+            color: #666;
+        }}
+        .modal-close:hover {{
+            color: #333;
+        }}
+        .sankey-controls {{
+            display: flex;
+            gap: 20px;
+            margin-bottom: 15px;
+            align-items: center;
+        }}
+        .sankey-controls label {{
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+        }}
+        .sankey-controls label.disabled {{
+            display: none;
         }}
         .home-grid {{
             display: grid;
@@ -523,6 +625,24 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
             <div class="page" id="page-nokkeltall">
                 <div class="chart">
                     <div id="nokkel-chart" style="height: 500px;"></div>
+                    <button id="sankey-btn" class="sankey-btn" onclick="openSankeyModal()" style="display: none;">📊 Vis reisestrømmer</button>
+                </div>
+            </div>
+
+            <!-- SANKEY MODAL -->
+            <div id="sankey-modal" class="modal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h2>Reisestrømmer</h2>
+                        <span class="modal-close" onclick="closeSankeyModal()">&times;</span>
+                    </div>
+                    <div class="sankey-controls" id="sankey-controls">
+                        <span><strong>Vis retning:</strong></span>
+                        <label id="sankey-fra-label"><input type="radio" name="sankey-retning" value="fra" checked onchange="updateSankeyChart()"> Fra valgte områder</label>
+                        <label id="sankey-til-label"><input type="radio" name="sankey-retning" value="til" onchange="updateSankeyChart()"> Til valgte områder</label>
+                    </div>
+                    <div id="sankey-chart" style="height: 600px;"></div>
+                    <p style="color: #666; font-size: 12px; margin-top: 10px;">Viser topp 10 relasjoner basert på siste 4 kvartaler.</p>
                 </div>
             </div>
 
@@ -701,46 +821,227 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
                 return fraMatch && tilMatch && tidMatch && ukedagMatch;
             }});
 
-            // Aggreger per kvartal
+            // Aggreger per kvartal (både reiser og trend)
             const kvartalSum = {{}};
+            const kvartalTrend = {{}};
             filtered.forEach(r => {{
                 if (!kvartalSum[r.kvartal]) {{
                     kvartalSum[r.kvartal] = 0;
+                    kvartalTrend[r.kvartal] = 0;
                 }}
                 kvartalSum[r.kvartal] += r.reiser || 0;
+                // Kun legg til trend hvis den ikke er null/NaN
+                if (r.trend != null && !isNaN(r.trend)) {{
+                    kvartalTrend[r.kvartal] += r.trend;
+                }}
             }});
 
             // Sorter kvartaler
             const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalSum[k] !== undefined);
             const yValues = sortedKvartaler.map(k => Math.round(kvartalSum[k] * 100) / 100);
+            // Sett trend til null hvis den er 0 (ingen gyldig trend)
+            const trendValues = sortedKvartaler.map(k => {{
+                const val = kvartalTrend[k];
+                return val === 0 ? null : Math.round(val * 100) / 100;
+            }});
 
-            // Lag tittel basert på filtre
-            let titleParts = [];
-            if (omraderFra.length === nokkelData.omrader_fra.length) {{
-                titleParts.push('Alle områder');
-            }} else if (omraderFra.length <= 3) {{
-                titleParts.push('Fra: ' + omraderFra.join(', '));
-            }} else {{
-                titleParts.push('Fra: ' + omraderFra.length + ' områder');
-            }}
-
-            const trace = {{
+            // Rådata som punkter
+            const traceRaw = {{
                 x: sortedKvartaler,
                 y: yValues,
                 type: 'scatter',
-                mode: 'lines+markers',
-                marker: {{ color: '#636EFA', size: 6 }},
-                line: {{ color: '#636EFA' }}
+                mode: 'markers',
+                name: 'Rådata',
+                marker: {{ color: '#636EFA', size: 8, opacity: 0.6 }}
+            }};
+
+            // Trend som glatt linje (spline)
+            const traceTrend = {{
+                x: sortedKvartaler,
+                y: trendValues,
+                type: 'scatter',
+                mode: 'lines',
+                name: 'Trend',
+                line: {{ color: '#EF553B', width: 2, shape: 'spline', smoothing: 1.0 }},
+                connectgaps: true
             }};
 
             const layout = {{
                 title: 'Nøkkeltall reiser - sum reiser per kvartal',
                 xaxis: {{ title: 'Kvartal', tickangle: -45, type: 'category' }},
                 yaxis: {{ title: 'Antall reiser (1000 per kvartal)', rangemode: 'tozero' }},
-                hovermode: 'x unified'
+                hovermode: 'x unified',
+                legend: {{ x: 0, y: 1.1, orientation: 'h' }}
             }};
 
-            Plotly.newPlot('nokkel-chart', [trace], layout, {{responsive: true}});
+            Plotly.newPlot('nokkel-chart', [traceRaw, traceTrend], layout, {{responsive: true}});
+
+            // Vis/skjul sankey-knapp basert på filter
+            const fraValg = Array.from(document.getElementById('omrade-fra').selectedOptions).map(o => o.value);
+            const tilValg = Array.from(document.getElementById('omrade-til').selectedOptions).map(o => o.value);
+            const fraAlleValgt = fraValg.includes('Alle') || fraValg.length === 0;
+            const tilAlleValgt = tilValg.includes('Alle') || tilValg.length === 0;
+            const sankeyBtn = document.getElementById('sankey-btn');
+            if (fraAlleValgt && tilAlleValgt) {{
+                sankeyBtn.style.display = 'none';
+            }} else {{
+                sankeyBtn.style.display = 'inline-block';
+            }}
+        }}
+
+        // Sankey modal funksjoner
+        function openSankeyModal() {{
+            const fraValg = Array.from(document.getElementById('omrade-fra').selectedOptions).map(o => o.value);
+            const tilValg = Array.from(document.getElementById('omrade-til').selectedOptions).map(o => o.value);
+            const fraAlleValgt = fraValg.includes('Alle') || fraValg.length === 0;
+            const tilAlleValgt = tilValg.includes('Alle') || tilValg.length === 0;
+
+            const fraLabel = document.getElementById('sankey-fra-label');
+            const tilLabel = document.getElementById('sankey-til-label');
+            const fraRadio = fraLabel.querySelector('input');
+            const tilRadio = tilLabel.querySelector('input');
+
+            // Vis/skjul radioknapper basert på filtervalg
+            if (fraAlleValgt) {{
+                fraLabel.classList.add('disabled');
+                tilLabel.classList.remove('disabled');
+                tilRadio.checked = true;
+            }} else if (tilAlleValgt) {{
+                tilLabel.classList.add('disabled');
+                fraLabel.classList.remove('disabled');
+                fraRadio.checked = true;
+            }} else {{
+                fraLabel.classList.remove('disabled');
+                tilLabel.classList.remove('disabled');
+            }}
+
+            document.getElementById('sankey-modal').style.display = 'block';
+            updateSankeyChart();
+        }}
+
+        function closeSankeyModal() {{
+            document.getElementById('sankey-modal').style.display = 'none';
+        }}
+
+        // Lukk modal ved klikk utenfor
+        window.onclick = function(event) {{
+            const modal = document.getElementById('sankey-modal');
+            if (event.target === modal) {{
+                modal.style.display = 'none';
+            }}
+        }}
+
+        function updateSankeyChart() {{
+            const omradeFraSelect = document.getElementById('omrade-fra');
+            const omradeTilSelect = document.getElementById('omrade-til');
+            const retning = document.querySelector('input[name="sankey-retning"]:checked').value;
+
+            // Hent valgte områder
+            let omraderFra = Array.from(omradeFraSelect.selectedOptions).map(o => o.value);
+            let omraderTil = Array.from(omradeTilSelect.selectedOptions).map(o => o.value);
+
+            // Sjekk om "Alle" er valgt
+            const fraAlleValgt = omraderFra.includes('Alle') || omraderFra.length === 0;
+            const tilAlleValgt = omraderTil.includes('Alle') || omraderTil.length === 0;
+
+            // Finn siste 4 kvartaler
+            const sisteKvartaler = nokkelData.kvartaler.slice(-4);
+
+            // Filtrer data for siste 4 kvartaler
+            let filtered = nokkelData.records.filter(r => sisteKvartaler.includes(r.kvartal));
+
+            // Aggreger reiser per fra-til kombinasjon
+            const strommer = {{}};
+            let title = '';
+
+            if (retning === 'fra') {{
+                // Fra valgte områder til andre
+                filtered.filter(r => omraderFra.includes(r.delomrade_fra)).forEach(r => {{
+                    const key = r.delomrade_fra + '|' + r.delomrade_til;
+                    if (!strommer[key]) {{
+                        strommer[key] = {{ fra: r.delomrade_fra, til: r.delomrade_til, reiser: 0 }};
+                    }}
+                    strommer[key].reiser += r.reiser || 0;
+                }});
+                title = 'Reiser FRA valgte områder (topp 10 destinasjoner)';
+            }} else {{
+                // Fra andre til valgte områder
+                filtered.filter(r => omraderTil.includes(r.delomrade_til)).forEach(r => {{
+                    const key = r.delomrade_fra + '|' + r.delomrade_til;
+                    if (!strommer[key]) {{
+                        strommer[key] = {{ fra: r.delomrade_fra, til: r.delomrade_til, reiser: 0 }};
+                    }}
+                    strommer[key].reiser += r.reiser || 0;
+                }});
+                title = 'Reiser TIL valgte områder (topp 10 opprinnelser)';
+            }}
+
+            // Sorter og ta topp 10
+            const topp10 = Object.values(strommer)
+                .sort((a, b) => b.reiser - a.reiser)
+                .slice(0, 10);
+
+            if (topp10.length === 0) {{
+                Plotly.newPlot('sankey-chart', [], {{
+                    title: 'Ingen data for valgte filtre',
+                    annotations: [{{
+                        text: 'Velg områder i sidemenyen',
+                        showarrow: false,
+                        font: {{ size: 16 }}
+                    }}]
+                }});
+                return;
+            }}
+
+            // Bygg Sankey-data
+            const fraLabels = [...new Set(topp10.map(d => d.fra))];
+            const tilLabels = [...new Set(topp10.map(d => d.til))];
+            const alleLabels = [...fraLabels, ...tilLabels];
+
+            // Farger - grønn for fra, blå for til
+            const colors = [
+                ...fraLabels.map(() => '#00CC96'),
+                ...tilLabels.map(() => '#636EFA')
+            ];
+
+            // Link-data
+            const sources = topp10.map(d => fraLabels.indexOf(d.fra));
+            const targets = topp10.map(d => fraLabels.length + tilLabels.indexOf(d.til));
+            const values = topp10.map(d => Math.round(d.reiser));
+
+            // Link-farger med gradient-effekt
+            const linkColors = topp10.map((d, i) => {{
+                const hue = (i * 50) % 360;
+                return `hsla(${{hue}}, 70%, 60%, 0.5)`;
+            }});
+
+            const trace = {{
+                type: 'sankey',
+                orientation: 'h',
+                node: {{
+                    pad: 20,
+                    thickness: 30,
+                    label: alleLabels,
+                    color: colors
+                }},
+                link: {{
+                    source: sources,
+                    target: targets,
+                    value: values,
+                    color: linkColors
+                }}
+            }};
+
+            const layout = {{
+                title: title,
+                font: {{ size: 12 }},
+                annotations: [
+                    {{ x: 0.0, y: 1.05, text: '<b>Fra</b>', showarrow: false, xref: 'paper', yref: 'paper', font: {{ color: '#00CC96' }} }},
+                    {{ x: 1.0, y: 1.05, text: '<b>Til</b>', showarrow: false, xref: 'paper', yref: 'paper', font: {{ color: '#636EFA' }} }}
+                ]
+            }};
+
+            Plotly.newPlot('sankey-chart', [trace], layout, {{responsive: true}});
         }}
     </script>
 </body>
@@ -778,7 +1079,7 @@ def main():
     import os
     os.makedirs("docs", exist_ok=True)
 
-    with open("docs/index_ny.html", "w", encoding="utf-8") as f:
+    with open("docs/index.html", "w", encoding="utf-8") as f:
         f.write(html)
 
     print(f"\nFerdig! Generert: docs/index.html")
