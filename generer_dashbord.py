@@ -344,6 +344,11 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
         .sankey-btn:hover {{
             background-color: #1e4a5f;
         }}
+        .chart-buttons {{
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }}
         .modal {{
             display: none;
             position: fixed;
@@ -625,7 +630,10 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
             <div class="page" id="page-nokkeltall">
                 <div class="chart">
                     <div id="nokkel-chart" style="height: 500px;"></div>
-                    <button id="sankey-btn" class="sankey-btn" onclick="openSankeyModal()" style="display: none;">📊 Vis reisestrømmer</button>
+                    <div class="chart-buttons">
+                        <button id="sankey-btn" class="sankey-btn" onclick="openSankeyModal()" style="display: none;">📊 Vis reisestrømmer</button>
+                        <button id="csv-btn" class="sankey-btn" onclick="exportCSV()">📥 Eksporter CSV</button>
+                    </div>
                 </div>
             </div>
 
@@ -793,6 +801,9 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
             Plotly.newPlot('reiser-chart', traces, layout, {{responsive: true}});
         }}
 
+        // Global variabel for CSV-eksport
+        let csvExportData = [];
+
         // Nøkkeltall reiser chart
         function updateNokkelChart() {{
             const omradeFraSelect = document.getElementById('omrade-fra');
@@ -800,16 +811,28 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
             const tidNokkel = document.querySelector('input[name="tid-nokkel"]:checked').value;
             const ukedagNokkel = document.querySelector('input[name="ukedag-nokkel"]:checked').value;
 
-            // Hent valgte områder
-            let omraderFra = Array.from(omradeFraSelect.selectedOptions).map(o => o.value);
-            let omraderTil = Array.from(omradeTilSelect.selectedOptions).map(o => o.value);
+            // Hent valgte områder (rå valg fra dropdown)
+            let fraValg = Array.from(omradeFraSelect.selectedOptions).map(o => o.value);
+            let tilValg = Array.from(omradeTilSelect.selectedOptions).map(o => o.value);
 
-            // Hvis "Alle" er valgt, bruk alle områder
-            if (omraderFra.includes('Alle') || omraderFra.length === 0) {{
-                omraderFra = nokkelData.omrader_fra;
-            }}
-            if (omraderTil.includes('Alle') || omraderTil.length === 0) {{
-                omraderTil = nokkelData.omrader_til;
+            const fraAlleValgt = fraValg.includes('Alle') || fraValg.length === 0;
+            const tilAlleValgt = tilValg.includes('Alle') || tilValg.length === 0;
+
+            // Bestem hvilke områder som skal brukes for filtrering
+            let omraderFra = fraAlleValgt ? nokkelData.omrader_fra : fraValg;
+            let omraderTil = tilAlleValgt ? nokkelData.omrader_til : tilValg;
+
+            // Bestem om vi skal splitte til flere linjer
+            // Prioriter fra-områder hvis begge har flervalg
+            let splitPå = null;
+            let splitOmrader = [];
+
+            if (!fraAlleValgt && fraValg.length > 1) {{
+                splitPå = 'fra';
+                splitOmrader = fraValg;
+            }} else if (!tilAlleValgt && tilValg.length > 1) {{
+                splitPå = 'til';
+                splitOmrader = tilValg;
             }}
 
             // Filtrer data
@@ -821,72 +844,235 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
                 return fraMatch && tilMatch && tidMatch && ukedagMatch;
             }});
 
-            // Aggreger per kvartal (både reiser og trend)
-            const kvartalSum = {{}};
-            const kvartalTrend = {{}};
-            filtered.forEach(r => {{
-                if (!kvartalSum[r.kvartal]) {{
-                    kvartalSum[r.kvartal] = 0;
-                    kvartalTrend[r.kvartal] = 0;
-                }}
-                kvartalSum[r.kvartal] += r.reiser || 0;
-                // Kun legg til trend hvis den ikke er null/NaN
-                if (r.trend != null && !isNaN(r.trend)) {{
-                    kvartalTrend[r.kvartal] += r.trend;
-                }}
-            }});
+            const traces = [];
+            csvExportData = [];
+            const farger = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52'];
 
-            // Sorter kvartaler
-            const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalSum[k] !== undefined);
-            const yValues = sortedKvartaler.map(k => Math.round(kvartalSum[k] * 100) / 100);
-            // Sett trend til null hvis den er 0 (ingen gyldig trend)
-            const trendValues = sortedKvartaler.map(k => {{
-                const val = kvartalTrend[k];
-                return val === 0 ? null : Math.round(val * 100) / 100;
-            }});
+            if (splitPå === 'fra') {{
+                // Flere linjer - én per fra-område
+                splitOmrader.forEach((omrade, idx) => {{
+                    const omradeFiltered = filtered.filter(r => r.delomrade_fra === omrade);
 
-            // Rådata som punkter
-            const traceRaw = {{
-                x: sortedKvartaler,
-                y: yValues,
-                type: 'scatter',
-                mode: 'markers',
-                name: 'Rådata',
-                marker: {{ color: '#636EFA', size: 8, opacity: 0.6 }}
-            }};
+                    // Aggreger per kvartal
+                    const kvartalSum = {{}};
+                    const kvartalTrend = {{}};
+                    omradeFiltered.forEach(r => {{
+                        if (!kvartalSum[r.kvartal]) {{
+                            kvartalSum[r.kvartal] = 0;
+                            kvartalTrend[r.kvartal] = 0;
+                        }}
+                        kvartalSum[r.kvartal] += r.reiser || 0;
+                        if (r.trend != null && !isNaN(r.trend)) {{
+                            kvartalTrend[r.kvartal] += r.trend;
+                        }}
+                    }});
 
-            // Trend som glatt linje (spline)
-            const traceTrend = {{
-                x: sortedKvartaler,
-                y: trendValues,
-                type: 'scatter',
-                mode: 'lines',
-                name: 'Trend',
-                line: {{ color: '#EF553B', width: 2, shape: 'spline', smoothing: 1.0 }},
-                connectgaps: true
-            }};
+                    const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalSum[k] !== undefined);
+                    const yValues = sortedKvartaler.map(k => Math.round(kvartalSum[k] * 100) / 100);
+                    const trendValues = sortedKvartaler.map(k => {{
+                        const val = kvartalTrend[k];
+                        return val === 0 ? null : Math.round(val * 100) / 100;
+                    }});
+
+                    const farge = farger[idx % farger.length];
+
+                    // Rådata som punkter (uten legend)
+                    traces.push({{
+                        x: sortedKvartaler,
+                        y: yValues,
+                        type: 'scatter',
+                        mode: 'markers',
+                        name: omrade,
+                        marker: {{ color: farge, size: 8, opacity: 0.6 }},
+                        showlegend: false
+                    }});
+
+                    // Trend som linje
+                    traces.push({{
+                        x: sortedKvartaler,
+                        y: trendValues,
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: omrade,
+                        line: {{ color: farge, width: 2, shape: 'spline', smoothing: 1.0 }},
+                        connectgaps: true
+                    }});
+
+                    // Lagre for CSV
+                    const tilOmraderTekst = tilAlleValgt ? 'Alle' : tilValg.join(', ');
+                    sortedKvartaler.forEach((k, i) => {{
+                        csvExportData.push({{
+                            område_fra: omrade,
+                            område_til: tilOmraderTekst,
+                            kvartal: k,
+                            rådata: yValues[i],
+                            trend: trendValues[i]
+                        }});
+                    }});
+                }});
+            }} else if (splitPå === 'til') {{
+                // Flere linjer basert på til-områder
+                splitOmrader.forEach((omrade, idx) => {{
+                    const omradeFiltered = filtered.filter(r => r.delomrade_til === omrade);
+
+                    // Aggreger per kvartal
+                    const kvartalSum = {{}};
+                    const kvartalTrend = {{}};
+                    omradeFiltered.forEach(r => {{
+                        if (!kvartalSum[r.kvartal]) {{
+                            kvartalSum[r.kvartal] = 0;
+                            kvartalTrend[r.kvartal] = 0;
+                        }}
+                        kvartalSum[r.kvartal] += r.reiser || 0;
+                        if (r.trend != null && !isNaN(r.trend)) {{
+                            kvartalTrend[r.kvartal] += r.trend;
+                        }}
+                    }});
+
+                    const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalSum[k] !== undefined);
+                    const yValues = sortedKvartaler.map(k => Math.round(kvartalSum[k] * 100) / 100);
+                    const trendValues = sortedKvartaler.map(k => {{
+                        const val = kvartalTrend[k];
+                        return val === 0 ? null : Math.round(val * 100) / 100;
+                    }});
+
+                    const farge = farger[idx % farger.length];
+
+                    // Rådata som punkter (uten legend)
+                    traces.push({{
+                        x: sortedKvartaler,
+                        y: yValues,
+                        type: 'scatter',
+                        mode: 'markers',
+                        name: omrade,
+                        marker: {{ color: farge, size: 8, opacity: 0.6 }},
+                        showlegend: false
+                    }});
+
+                    // Trend som linje
+                    traces.push({{
+                        x: sortedKvartaler,
+                        y: trendValues,
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: omrade,
+                        line: {{ color: farge, width: 2, shape: 'spline', smoothing: 1.0 }},
+                        connectgaps: true
+                    }});
+
+                    // Lagre for CSV
+                    const fraOmraderTekst = fraAlleValgt ? 'Alle' : fraValg.join(', ');
+                    sortedKvartaler.forEach((k, i) => {{
+                        csvExportData.push({{
+                            område_fra: fraOmraderTekst,
+                            område_til: omrade,
+                            kvartal: k,
+                            rådata: yValues[i],
+                            trend: trendValues[i]
+                        }});
+                    }});
+                }});
+            }} else {{
+                // Én samlet linje
+                const kvartalSum = {{}};
+                const kvartalTrend = {{}};
+                filtered.forEach(r => {{
+                    if (!kvartalSum[r.kvartal]) {{
+                        kvartalSum[r.kvartal] = 0;
+                        kvartalTrend[r.kvartal] = 0;
+                    }}
+                    kvartalSum[r.kvartal] += r.reiser || 0;
+                    if (r.trend != null && !isNaN(r.trend)) {{
+                        kvartalTrend[r.kvartal] += r.trend;
+                    }}
+                }});
+
+                const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalSum[k] !== undefined);
+                const yValues = sortedKvartaler.map(k => Math.round(kvartalSum[k] * 100) / 100);
+                const trendValues = sortedKvartaler.map(k => {{
+                    const val = kvartalTrend[k];
+                    return val === 0 ? null : Math.round(val * 100) / 100;
+                }});
+
+                traces.push({{
+                    x: sortedKvartaler,
+                    y: yValues,
+                    type: 'scatter',
+                    mode: 'markers',
+                    name: 'Rådata',
+                    marker: {{ color: '#636EFA', size: 8, opacity: 0.6 }},
+                    showlegend: false
+                }});
+
+                traces.push({{
+                    x: sortedKvartaler,
+                    y: trendValues,
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: 'Trend',
+                    line: {{ color: '#636EFA', width: 2, shape: 'spline', smoothing: 1.0 }},
+                    connectgaps: true
+                }});
+
+                // Lagre for CSV
+                const fraOmraderTekst = fraAlleValgt ? 'Alle' : fraValg.join(', ');
+                const tilOmraderTekst = tilAlleValgt ? 'Alle' : tilValg.join(', ');
+                sortedKvartaler.forEach((k, i) => {{
+                    csvExportData.push({{
+                        område_fra: fraOmraderTekst,
+                        område_til: tilOmraderTekst,
+                        kvartal: k,
+                        rådata: yValues[i],
+                        trend: trendValues[i]
+                    }});
+                }});
+            }}
 
             const layout = {{
                 title: 'Nøkkeltall reiser - sum reiser per kvartal',
                 xaxis: {{ title: 'Kvartal', tickangle: -45, type: 'category' }},
                 yaxis: {{ title: 'Antall reiser (1000 per kvartal)', rangemode: 'tozero' }},
                 hovermode: 'x unified',
-                legend: {{ x: 0, y: 1.1, orientation: 'h' }}
+                legend: {{ x: 0, y: 1.15, orientation: 'h' }}
             }};
 
-            Plotly.newPlot('nokkel-chart', [traceRaw, traceTrend], layout, {{responsive: true}});
+            Plotly.newPlot('nokkel-chart', traces, layout, {{responsive: true}});
 
             // Vis/skjul sankey-knapp basert på filter
-            const fraValg = Array.from(document.getElementById('omrade-fra').selectedOptions).map(o => o.value);
-            const tilValg = Array.from(document.getElementById('omrade-til').selectedOptions).map(o => o.value);
-            const fraAlleValgt = fraValg.includes('Alle') || fraValg.length === 0;
-            const tilAlleValgt = tilValg.includes('Alle') || tilValg.length === 0;
             const sankeyBtn = document.getElementById('sankey-btn');
             if (fraAlleValgt && tilAlleValgt) {{
                 sankeyBtn.style.display = 'none';
             }} else {{
                 sankeyBtn.style.display = 'inline-block';
             }}
+        }}
+
+        // CSV eksport funksjon
+        function exportCSV() {{
+            if (csvExportData.length === 0) {{
+                alert('Ingen data å eksportere');
+                return;
+            }}
+
+            // Lag CSV-innhold
+            const headers = ['Område fra', 'Område til', 'Kvartal', 'Rådata', 'Trend'];
+            const csvContent = [
+                headers.join(';'),
+                ...csvExportData.map(row => [
+                    row.område_fra,
+                    row.område_til,
+                    row.kvartal,
+                    row.rådata != null ? String(row.rådata).replace('.', ',') : '',
+                    row.trend != null ? String(row.trend).replace('.', ',') : ''
+                ].join(';'))
+            ].join('\\n');
+
+            // Last ned fil
+            const blob = new Blob([csvContent], {{ type: 'text/csv;charset=utf-8;' }});
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'nokkeltall_reiser.csv';
+            link.click();
         }}
 
         // Sankey modal funksjoner
