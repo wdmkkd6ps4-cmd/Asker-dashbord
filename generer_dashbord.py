@@ -23,11 +23,9 @@ def load_and_process_ko_data(filepath):
     df.columns = df.columns.str.strip().str.replace('\ufeff', '')
     df.columns = df.columns.str.lower()
 
-    # Konverter dato
     df["dato"] = pd.to_datetime(df["dato"])
     df["dato_str"] = df["dato"].dt.strftime("%d.%m.%Y")
 
-    # Håndter numeriske verdier
     df["forsinkelser"] = pd.to_numeric(df["forsinkelser"], errors="coerce")
     df["ko_min_km"] = pd.to_numeric(df["ko_min_km"], errors="coerce")
     df["bil"] = pd.to_numeric(df["bil"], errors="coerce")
@@ -44,9 +42,25 @@ def load_and_process_reiser_data(filepath):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Lag sorteringsnøkkel
     df["kvartal_sort"] = df["kvartal"].str.replace("-", "").astype(int)
     df = df.sort_values("kvartal_sort").reset_index(drop=True)
+
+    return df
+
+
+def load_and_process_nokkel_data(filepath):
+    """Last inn og preprosesser nøkkeltalldata"""
+    df = pd.read_csv(filepath, sep=";", decimal=",", encoding="utf-8-sig")
+    df.columns = df.columns.str.strip().str.replace('\ufeff', '')
+
+    # Konverter delområder til string (fjern .0)
+    df["delomrade_fra"] = df["delomrade_fra"].astype(int).astype(str)
+    df["delomrade_til"] = df["delomrade_til"].astype(int).astype(str)
+
+    df["reiser"] = pd.to_numeric(df["reiser"], errors="coerce")
+
+    # Lag sorteringsnøkkel for kvartal
+    df["kvartal_sort"] = df["kvartal"].str.replace("-", "").astype(int)
 
     return df
 
@@ -61,8 +75,6 @@ def aggregate_ko_data(df):
         if len(df_tid) == 0:
             continue
 
-        # ===== ALLE STREKNINGER (vektet gjennomsnitt) =====
-        # Per dato - vektet gjennomsnitt
         def weighted_avg_ko(group):
             mask = group["ko_min_km"].notna() & group["bil"].notna() & (group["bil"] > 0)
             if mask.sum() == 0:
@@ -75,12 +87,11 @@ def aggregate_ko_data(df):
                 return np.nan
             return (group.loc[mask, "forsinkelser"] * group.loc[mask, "bil"]).sum() / group.loc[mask, "bil"].sum()
 
-        # Aggreger per dato for alle strekninger
         agg_alle_dato = df_tid.groupby("dato").apply(
             lambda g: pd.Series({
                 "ko_min_km": weighted_avg_ko(g),
                 "forsinkelser": weighted_avg_forsinkelser(g)
-            })
+            }), include_groups=False
         ).reset_index()
         agg_alle_dato = agg_alle_dato.sort_values("dato")
         agg_alle_dato["dato_str"] = agg_alle_dato["dato"].dt.strftime("%d.%m.%Y")
@@ -92,12 +103,11 @@ def aggregate_ko_data(df):
             "forsinkelser": [round(x, 3) if pd.notna(x) else None for x in agg_alle_dato["forsinkelser"].tolist()]
         }
 
-        # Aggreger per klokkeslett for alle strekninger
         agg_alle_klokke = df_tid.groupby("klokkeslett").apply(
             lambda g: pd.Series({
                 "ko_min_km": weighted_avg_ko(g),
                 "forsinkelser": weighted_avg_forsinkelser(g)
-            })
+            }), include_groups=False
         ).reset_index()
         agg_alle_klokke = agg_alle_klokke.sort_values("klokkeslett")
 
@@ -108,11 +118,9 @@ def aggregate_ko_data(df):
             "forsinkelser": [round(x, 3) if pd.notna(x) else None for x in agg_alle_klokke["forsinkelser"].tolist()]
         }
 
-        # ===== PER STREKNING =====
         for stop in df_tid["stop_name"].dropna().unique():
             df_stop = df_tid[df_tid["stop_name"] == stop]
 
-            # Per dato (median per dag)
             agg = df_stop.groupby(["dato", "dato_str"]).agg({
                 "ko_min_km": "median",
                 "forsinkelser": "median"
@@ -126,7 +134,6 @@ def aggregate_ko_data(df):
                 "forsinkelser": [round(x, 3) if pd.notna(x) else None for x in agg["forsinkelser"].tolist()]
             }
 
-            # Per klokkeslett (median over alle datoer)
             agg_klokke = df_stop.groupby("klokkeslett").agg({
                 "ko_min_km": "median",
                 "forsinkelser": "median"
@@ -143,13 +150,31 @@ def aggregate_ko_data(df):
     return aggregated
 
 
-def generate_html(ko_data, reiser_data, ko_aggregated):
+def prepare_nokkel_data(df):
+    """Forbered nøkkeltalldata for JavaScript"""
+    # Lag liste over unike verdier
+    omrader_fra = sorted(df["delomrade_fra"].unique().tolist())
+    omrader_til = sorted(df["delomrade_til"].unique().tolist())
+    tider = sorted(df["time_of_day"].unique().tolist())
+    kvartaler = df.sort_values("kvartal_sort")["kvartal"].unique().tolist()
+
+    # Konverter hele datasettet til liste av dicts for JavaScript
+    records = df[["delomrade_fra", "delomrade_til", "kvartal", "reiser", "time_of_day", "weekday_indicator"]].to_dict("records")
+
+    return {
+        "records": records,
+        "omrader_fra": omrader_fra,
+        "omrader_til": omrader_til,
+        "tider": tider,
+        "kvartaler": kvartaler
+    }
+
+
+def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
     """Generer HTML med embedded data og JavaScript"""
 
-    # Legg til "Alle strekninger" først i listen
     strekninger_ko = ["Alle strekninger"] + sorted(ko_data["stop_name"].dropna().unique().tolist())
     strekninger_reiser = sorted(reiser_data["ID"].unique().tolist())
-    kvartaler = reiser_data.sort_values("kvartal_sort")["kvartal"].unique().tolist()
 
     # Forbered reisedata som dict
     reiser_dict = {}
@@ -163,6 +188,17 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
             "gange": [round(x, 2) if pd.notna(x) else None for x in df_s["gange"].tolist()],
             "tog": [round(x, 2) if pd.notna(x) else None for x in df_s["tog"].tolist()]
         }
+
+    # Generer options for flervalg
+    omrade_fra_options = '<option value="Alle" selected>Alle</option>\n' + \
+        "\n".join(f'<option value="{o}">{o}</option>' for o in nokkel_data["omrader_fra"])
+    omrade_til_options = '<option value="Alle" selected>Alle</option>\n' + \
+        "\n".join(f'<option value="{o}">{o}</option>' for o in nokkel_data["omrader_til"])
+
+    # Generer radiobuttons for tid på dagen
+    tid_radios = '<label><input type="radio" name="tid-nokkel" value="Alle" checked onchange="updateNokkelChart()"> Alle</label>\n'
+    for tid in sorted(nokkel_data["tider"]):
+        tid_radios += f'<label><input type="radio" name="tid-nokkel" value="{tid}" onchange="updateNokkelChart()"> {tid}</label>\n'
 
     html = f'''<!DOCTYPE html>
 <html lang="no">
@@ -235,6 +271,9 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
             margin-top: 5px;
             border: 1px solid #ccc;
             border-radius: 4px;
+        }}
+        .sidebar select[multiple] {{
+            height: 150px;
         }}
         .sidebar hr {{
             margin: 20px 0;
@@ -309,6 +348,12 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
             width: auto;
             margin-right: 8px;
         }}
+        .filter-hint {{
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+            font-weight: normal;
+        }}
         @media (max-width: 900px) {{
             .container {{
                 flex-direction: column;
@@ -331,6 +376,7 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
         <button class="active" onclick="showPage('hjem')">Hjem</button>
         <button onclick="showPage('forsinkelser')">Forsinkelser</button>
         <button onclick="showPage('reisestatistikk')">Reisestatistikk</button>
+        <button onclick="showPage('nokkeltall')">Nøkkeltall reiser</button>
         <button onclick="showPage('kart')">Kart</button>
     </div>
 
@@ -377,6 +423,38 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
             </select>
         </div>
 
+        <div class="sidebar" id="sidebar-nokkeltall" style="display: none;">
+            <h3>Velg filtre</h3>
+
+            <label for="omrade-fra">Område fra</label>
+            <select id="omrade-fra" multiple onchange="updateNokkelChart()">
+                {omrade_fra_options}
+            </select>
+            <div class="filter-hint">Ctrl+klikk for flervalg</div>
+
+            <label for="omrade-til">Område til</label>
+            <select id="omrade-til" multiple onchange="updateNokkelChart()">
+                {omrade_til_options}
+            </select>
+            <div class="filter-hint">Ctrl+klikk for flervalg</div>
+
+            <hr>
+
+            <label>Tid på dagen:</label>
+            <div class="radio-group">
+                {tid_radios}
+            </div>
+
+            <hr>
+
+            <label>Ukedag/helg:</label>
+            <div class="radio-group">
+                <label><input type="radio" name="ukedag-nokkel" value="Alle" checked onchange="updateNokkelChart()"> Alle</label>
+                <label><input type="radio" name="ukedag-nokkel" value="Weekday" onchange="updateNokkelChart()"> Ukedag</label>
+                <label><input type="radio" name="ukedag-nokkel" value="Weekend" onchange="updateNokkelChart()"> Helg</label>
+            </div>
+        </div>
+
         <div class="main">
             <!-- HJEM -->
             <div class="page active" id="page-hjem">
@@ -415,6 +493,15 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
                             <li>Filtrer på strekning</li>
                         </ul>
                     </div>
+                    <div class="home-card">
+                        <h3>📈 Nøkkeltall reiser</h3>
+                        <p>Detaljert reisestatistikk mellom områder.</p>
+                        <ul style="margin-top: 10px; margin-left: 20px;">
+                            <li>Filtrer på fra/til-område</li>
+                            <li>Tid på dagen</li>
+                            <li>Ukedag/helg</li>
+                        </ul>
+                    </div>
                 </div>
             </div>
 
@@ -429,6 +516,13 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
             <div class="page" id="page-reisestatistikk">
                 <div class="chart">
                     <div id="reiser-chart" style="height: 500px;"></div>
+                </div>
+            </div>
+
+            <!-- NØKKELTALL REISER -->
+            <div class="page" id="page-nokkeltall">
+                <div class="chart">
+                    <div id="nokkel-chart" style="height: 500px;"></div>
                 </div>
             </div>
 
@@ -466,25 +560,26 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
         // Embedded data
         const koData = {json.dumps(ko_aggregated, ensure_ascii=False)};
         const reiserData = {json.dumps(reiser_dict, ensure_ascii=False)};
+        const nokkelData = {json.dumps(nokkel_data, ensure_ascii=False)};
 
         // Navigation
         function showPage(page) {{
-            // Hide all pages and sidebars
             document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
             document.querySelectorAll('.sidebar').forEach(s => s.style.display = 'none');
             document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
 
-            // Show selected page
             document.getElementById('page-' + page).classList.add('active');
             event.target.classList.add('active');
 
-            // Show relevant sidebar
             if (page === 'forsinkelser') {{
                 document.getElementById('sidebar-forsinkelser').style.display = 'block';
                 updateKoChart();
             }} else if (page === 'reisestatistikk') {{
                 document.getElementById('sidebar-reisestatistikk').style.display = 'block';
                 updateReiserChart();
+            }} else if (page === 'nokkeltall') {{
+                document.getElementById('sidebar-nokkeltall').style.display = 'block';
+                updateNokkelChart();
             }}
         }}
 
@@ -577,6 +672,76 @@ def generate_html(ko_data, reiser_data, ko_aggregated):
 
             Plotly.newPlot('reiser-chart', traces, layout, {{responsive: true}});
         }}
+
+        // Nøkkeltall reiser chart
+        function updateNokkelChart() {{
+            const omradeFraSelect = document.getElementById('omrade-fra');
+            const omradeTilSelect = document.getElementById('omrade-til');
+            const tidNokkel = document.querySelector('input[name="tid-nokkel"]:checked').value;
+            const ukedagNokkel = document.querySelector('input[name="ukedag-nokkel"]:checked').value;
+
+            // Hent valgte områder
+            let omraderFra = Array.from(omradeFraSelect.selectedOptions).map(o => o.value);
+            let omraderTil = Array.from(omradeTilSelect.selectedOptions).map(o => o.value);
+
+            // Hvis "Alle" er valgt, bruk alle områder
+            if (omraderFra.includes('Alle') || omraderFra.length === 0) {{
+                omraderFra = nokkelData.omrader_fra;
+            }}
+            if (omraderTil.includes('Alle') || omraderTil.length === 0) {{
+                omraderTil = nokkelData.omrader_til;
+            }}
+
+            // Filtrer data
+            let filtered = nokkelData.records.filter(r => {{
+                const fraMatch = omraderFra.includes(r.delomrade_fra);
+                const tilMatch = omraderTil.includes(r.delomrade_til);
+                const tidMatch = tidNokkel === 'Alle' || r.time_of_day === tidNokkel;
+                const ukedagMatch = ukedagNokkel === 'Alle' || r.weekday_indicator === ukedagNokkel;
+                return fraMatch && tilMatch && tidMatch && ukedagMatch;
+            }});
+
+            // Aggreger per kvartal
+            const kvartalSum = {{}};
+            filtered.forEach(r => {{
+                if (!kvartalSum[r.kvartal]) {{
+                    kvartalSum[r.kvartal] = 0;
+                }}
+                kvartalSum[r.kvartal] += r.reiser || 0;
+            }});
+
+            // Sorter kvartaler
+            const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalSum[k] !== undefined);
+            const yValues = sortedKvartaler.map(k => Math.round(kvartalSum[k] * 100) / 100);
+
+            // Lag tittel basert på filtre
+            let titleParts = [];
+            if (omraderFra.length === nokkelData.omrader_fra.length) {{
+                titleParts.push('Alle områder');
+            }} else if (omraderFra.length <= 3) {{
+                titleParts.push('Fra: ' + omraderFra.join(', '));
+            }} else {{
+                titleParts.push('Fra: ' + omraderFra.length + ' områder');
+            }}
+
+            const trace = {{
+                x: sortedKvartaler,
+                y: yValues,
+                type: 'scatter',
+                mode: 'lines+markers',
+                marker: {{ color: '#636EFA', size: 6 }},
+                line: {{ color: '#636EFA' }}
+            }};
+
+            const layout = {{
+                title: 'Nøkkeltall reiser - sum reiser per kvartal',
+                xaxis: {{ title: 'Kvartal', tickangle: -45, type: 'category' }},
+                yaxis: {{ title: 'Antall reiser (1000 per kvartal)', rangemode: 'tozero' }},
+                hovermode: 'x unified'
+            }};
+
+            Plotly.newPlot('nokkel-chart', [trace], layout, {{responsive: true}});
+        }}
     </script>
 </body>
 </html>
@@ -595,17 +760,21 @@ def main():
     reiser_data = load_and_process_reiser_data("data/inndata_asker_reiser.csv")
     print(f"  - {len(reiser_data)} rader")
 
+    print("\nLaster nøkkeltalldata...")
+    nokkel_df = load_and_process_nokkel_data("data/inndata_asker_nokkel.csv")
+    nokkel_data = prepare_nokkel_data(nokkel_df)
+    print(f"  - {len(nokkel_df)} rader")
+    print(f"  - Områder fra: {len(nokkel_data['omrader_fra'])}")
+    print(f"  - Områder til: {len(nokkel_data['omrader_til'])}")
+    print(f"  - Tidsperioder: {len(nokkel_data['tider'])}")
+
     print("\nAggregerer kødata...")
     ko_aggregated = aggregate_ko_data(ko_data)
     print(f"  - {len(ko_aggregated)} datasett generert")
 
-    # Debug: vis noen nøkler
-    print(f"  - Eksempel-nøkler: {list(ko_aggregated.keys())[:5]}")
-
     print("\nGenererer HTML...")
-    html = generate_html(ko_data, reiser_data, ko_aggregated)
+    html = generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data)
 
-    # Lagre til docs/ for GitHub Pages
     import os
     os.makedirs("docs", exist_ok=True)
 

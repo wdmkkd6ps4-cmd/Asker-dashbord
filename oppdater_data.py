@@ -29,6 +29,14 @@ df_reiser = client.query_df(
 df_reiser.to_csv("data/inndata_asker_reiser.csv", sep=";", decimal=",", index=False, encoding="utf-8-sig")
 print(f"Eksportert {len(df_reiser)} rader (reisestatistikk)")
 
+# Eksport av reisestatistikk
+print("Eksporterer nøkkeltall...")
+df_nokkel = client.query_df(
+    "SELECT * FROM `3-06 Nokkeltall`"
+)
+df_nokkel.to_csv("data/inndata_asker_nokkel.csv", sep=";", decimal=",", index=False, encoding="utf-8-sig")
+print(f"Eksportert {len(df_nokkel)} rader (Nøkkeltall)")
+
 print("\nFerdig! Husk å committe og pushe til GitHub:")
 print("  git add data/")
 print("  git commit -m 'Oppdatert data'")
