@@ -62,38 +62,6 @@ def load_and_process_nokkel_data(filepath):
     # Lag sorteringsnøkkel for kvartal
     df["kvartal_sort"] = df["kvartal"].str.replace("-", "").astype(int)
 
-    # Beregn trend per gruppe
-    df = beregn_trend(df)
-
-    return df
-
-
-def beregn_trend(df):
-    """Beregn trend med glidende gjennomsnitt for hver kombinasjon av fra/til/tid/ukedag"""
-    from tqdm import tqdm
-
-    df = df.sort_values("kvartal_sort")
-    df["trend"] = np.nan
-
-    # Grupper på alle filtervariablene
-    grupper = list(df.groupby(["delomrade_fra", "delomrade_til", "time_of_day", "weekday_indicator"]))
-
-    for name, gruppe in tqdm(grupper, desc="Beregner trend"):
-        idx = gruppe.index
-
-        if len(gruppe) < 3:
-            df.loc[idx, "trend"] = np.nan
-            continue
-
-        y = gruppe["reiser"].values.copy()
-
-        # Glidende gjennomsnitt med vindu på 5 kvartaler (sentrert)
-        trend = pd.Series(y).rolling(window=5, center=True, min_periods=1).mean().values
-        df.loc[idx, "trend"] = trend
-
-    # Rund av trend
-    df["trend"] = df["trend"].round(2)
-
     return df
 
 
@@ -190,9 +158,9 @@ def prepare_nokkel_data(df):
     tider = sorted(df["time_of_day"].unique().tolist())
     kvartaler = df.sort_values("kvartal_sort")["kvartal"].unique().tolist()
 
-    # Konverter hele datasettet til liste av dicts for JavaScript (inkl. trend)
+    # Konverter hele datasettet til liste av dicts for JavaScript (uten trend - beregnes i JS)
     records = df[
-        ["delomrade_fra", "delomrade_til", "kvartal", "reiser", "trend", "time_of_day", "weekday_indicator"]].to_dict(
+        ["delomrade_fra", "delomrade_til", "kvartal", "reiser", "time_of_day", "weekday_indicator"]].to_dict(
         "records")
 
     return {
@@ -414,6 +382,12 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
             padding: 20px;
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }}
+        .home-card:hover {{
+            transform: translateY(-3px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }}
         .home-card h3 {{
             margin-bottom: 15px;
@@ -481,9 +455,9 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
 
     <div class="nav">
         <button class="active" onclick="showPage('hjem')">Hjem</button>
-        <button onclick="showPage('forsinkelser')">Forsinkelser</button>
-        <button onclick="showPage('reisestatistikk')">Reisestatistikk</button>
-        <button onclick="showPage('nokkeltall')">Nøkkeltall reiser</button>
+        <button onclick="showPage('forsinkelser')">Forsinkelser og køer</button>
+        <button onclick="showPage('reisestatistikk')">Reisestatistikk Asker sentrum</button>
+        <button onclick="showPage('nokkeltall')">Reisestrømmer i Asker kommune</button>
         <button onclick="showPage('kart')">Kart</button>
     </div>
 
@@ -572,8 +546,8 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
                 </p>
 
                 <div class="home-grid">
-                    <div class="home-card">
-                        <h3>📊 Forsinkelser</h3>
+                    <div class="home-card" onclick="navigateTo('forsinkelser')">
+                        <h3>📊 Forsinkelser og køer</h3>
                         <p>Oversikt over kø og forsinkelser på utvalgte strekninger i Asker.</p>
                         <ul style="margin-top: 10px; margin-left: 20px;">
                             <li>Køindeks (min/km)</li>
@@ -581,7 +555,7 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
                             <li>Filtrer på tid og strekning</li>
                         </ul>
                     </div>
-                    <div class="home-card">
+                    <div class="home-card" onclick="navigateTo('kart')">
                         <h3>🗺️ Kart</h3>
                         <p>Interaktivt kart over Asker sentrum.</p>
                         <ul style="margin-top: 10px; margin-left: 20px;">
@@ -591,8 +565,8 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
                             <li>Soner og grids</li>
                         </ul>
                     </div>
-                    <div class="home-card">
-                        <h3>🚌 Reisestatistikk</h3>
+                    <div class="home-card" onclick="navigateTo('reisestatistikk')">
+                        <h3>🚌 Reisestatistikk Asker sentrum</h3>
                         <p>Statistikk over reiser og reisemønstre.</p>
                         <ul style="margin-top: 10px; margin-left: 20px;">
                             <li>Antall reiser per kvartal</li>
@@ -600,8 +574,8 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
                             <li>Filtrer på strekning</li>
                         </ul>
                     </div>
-                    <div class="home-card">
-                        <h3>📈 Nøkkeltall reiser</h3>
+                    <div class="home-card" onclick="navigateTo('nokkeltall')">
+                        <h3>📈 Reisestrømmer i Asker kommune</h3>
                         <p>Detaljert reisestatistikk mellom områder.</p>
                         <ul style="margin-top: 10px; margin-left: 20px;">
                             <li>Filtrer på fra/til-område</li>
@@ -711,6 +685,34 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
             }}
         }}
 
+        // Navigering fra hjem-kort
+        function navigateTo(page) {{
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.sidebar').forEach(s => s.style.display = 'none');
+            document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
+
+            document.getElementById('page-' + page).classList.add('active');
+
+            // Finn og marker riktig navigasjonsknapp
+            const navButtons = document.querySelectorAll('.nav button');
+            navButtons.forEach(btn => {{
+                if (btn.getAttribute('onclick') === "showPage('" + page + "')") {{
+                    btn.classList.add('active');
+                }}
+            }});
+
+            if (page === 'forsinkelser') {{
+                document.getElementById('sidebar-forsinkelser').style.display = 'block';
+                updateKoChart();
+            }} else if (page === 'reisestatistikk') {{
+                document.getElementById('sidebar-reisestatistikk').style.display = 'block';
+                updateReiserChart();
+            }} else if (page === 'nokkeltall') {{
+                document.getElementById('sidebar-nokkeltall').style.display = 'block';
+                updateNokkelChart();
+            }}
+        }}
+
         // Kø/Forsinkelser chart
         function updateKoChart() {{
             const strekning = document.getElementById('strekning-ko').value;
@@ -804,6 +806,37 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
         // Global variabel for CSV-eksport
         let csvExportData = [];
 
+        // Funksjon for å beregne sentrert glidende gjennomsnitt
+        function beregnGlidendeGjennomsnitt(values, windowSize) {{
+            const result = [];
+            const halfWindow = Math.floor(windowSize / 2);
+
+            for (let i = 0; i < values.length; i++) {{
+                // Beregn start og slutt for vinduet (sentrert)
+                let start = Math.max(0, i - halfWindow);
+                let end = Math.min(values.length - 1, i + halfWindow);
+
+                // Samle verdier i vinduet (ignorer null/undefined)
+                let sum = 0;
+                let count = 0;
+                for (let j = start; j <= end; j++) {{
+                    if (values[j] != null && !isNaN(values[j])) {{
+                        sum += values[j];
+                        count++;
+                    }}
+                }}
+
+                // Beregn gjennomsnitt hvis vi har minst 1 verdi
+                if (count > 0) {{
+                    result.push(Math.round(sum / count * 100) / 100);
+                }} else {{
+                    result.push(null);
+                }}
+            }}
+
+            return result;
+        }}
+
         // Nøkkeltall reiser chart
         function updateNokkelChart() {{
             const omradeFraSelect = document.getElementById('omrade-fra');
@@ -855,24 +888,18 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
 
                     // Aggreger per kvartal
                     const kvartalSum = {{}};
-                    const kvartalTrend = {{}};
                     omradeFiltered.forEach(r => {{
                         if (!kvartalSum[r.kvartal]) {{
                             kvartalSum[r.kvartal] = 0;
-                            kvartalTrend[r.kvartal] = 0;
                         }}
                         kvartalSum[r.kvartal] += r.reiser || 0;
-                        if (r.trend != null && !isNaN(r.trend)) {{
-                            kvartalTrend[r.kvartal] += r.trend;
-                        }}
                     }});
 
                     const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalSum[k] !== undefined);
                     const yValues = sortedKvartaler.map(k => Math.round(kvartalSum[k] * 100) / 100);
-                    const trendValues = sortedKvartaler.map(k => {{
-                        const val = kvartalTrend[k];
-                        return val === 0 ? null : Math.round(val * 100) / 100;
-                    }});
+
+                    // Beregn trend ETTER aggregering
+                    const trendValues = beregnGlidendeGjennomsnitt(yValues, 5);
 
                     const farge = farger[idx % farger.length];
 
@@ -917,24 +944,18 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
 
                     // Aggreger per kvartal
                     const kvartalSum = {{}};
-                    const kvartalTrend = {{}};
                     omradeFiltered.forEach(r => {{
                         if (!kvartalSum[r.kvartal]) {{
                             kvartalSum[r.kvartal] = 0;
-                            kvartalTrend[r.kvartal] = 0;
                         }}
                         kvartalSum[r.kvartal] += r.reiser || 0;
-                        if (r.trend != null && !isNaN(r.trend)) {{
-                            kvartalTrend[r.kvartal] += r.trend;
-                        }}
                     }});
 
                     const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalSum[k] !== undefined);
                     const yValues = sortedKvartaler.map(k => Math.round(kvartalSum[k] * 100) / 100);
-                    const trendValues = sortedKvartaler.map(k => {{
-                        const val = kvartalTrend[k];
-                        return val === 0 ? null : Math.round(val * 100) / 100;
-                    }});
+
+                    // Beregn trend ETTER aggregering
+                    const trendValues = beregnGlidendeGjennomsnitt(yValues, 5);
 
                     const farge = farger[idx % farger.length];
 
@@ -975,24 +996,18 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
             }} else {{
                 // Én samlet linje
                 const kvartalSum = {{}};
-                const kvartalTrend = {{}};
                 filtered.forEach(r => {{
                     if (!kvartalSum[r.kvartal]) {{
                         kvartalSum[r.kvartal] = 0;
-                        kvartalTrend[r.kvartal] = 0;
                     }}
                     kvartalSum[r.kvartal] += r.reiser || 0;
-                    if (r.trend != null && !isNaN(r.trend)) {{
-                        kvartalTrend[r.kvartal] += r.trend;
-                    }}
                 }});
 
                 const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalSum[k] !== undefined);
                 const yValues = sortedKvartaler.map(k => Math.round(kvartalSum[k] * 100) / 100);
-                const trendValues = sortedKvartaler.map(k => {{
-                    const val = kvartalTrend[k];
-                    return val === 0 ? null : Math.round(val * 100) / 100;
-                }});
+
+                // Beregn trend ETTER aggregering
+                const trendValues = beregnGlidendeGjennomsnitt(yValues, 5);
 
                 traces.push({{
                     x: sortedKvartaler,
@@ -1029,7 +1044,7 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
             }}
 
             const layout = {{
-                title: 'Nøkkeltall reiser - sum reiser per kvartal',
+                title: 'Reisestrømmer i Asker kommune - sum reiser per kvartal',
                 xaxis: {{ title: 'Kvartal', tickangle: -45, type: 'category' }},
                 yaxis: {{ title: 'Antall reiser (1000 per kvartal)', rangemode: 'tozero' }},
                 hovermode: 'x unified',
@@ -1072,7 +1087,7 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
             const blob = new Blob([BOM + csvContent], {{ type: 'text/csv;charset=utf-8;' }});
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
-            link.download = 'nokkeltall_reiser.csv';
+            link.download = 'reisestrommer_asker.csv';
             link.click();
         }}
 
