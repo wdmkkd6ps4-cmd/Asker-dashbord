@@ -446,6 +446,47 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
                 grid-template-columns: 1fr;
             }}
         }}
+        .help-content {{
+            max-width: 800px;
+            line-height: 1.6;
+        }}
+        .help-content h2 {{
+            color: #2c5f7c;
+            margin-bottom: 30px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #2c5f7c;
+        }}
+        .help-content section {{
+            background: white;
+            padding: 25px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }}
+        .help-content h3 {{
+            color: #2c5f7c;
+            margin-bottom: 15px;
+        }}
+        .help-content ul, .help-content ol {{
+            margin-left: 20px;
+            margin-top: 10px;
+            margin-bottom: 10px;
+        }}
+        .help-content li {{
+            margin-bottom: 8px;
+        }}
+        .help-content p {{
+            margin-bottom: 10px;
+        }}
+        .help-content em {{
+            color: #666;
+        }}
+        .help-content a {{
+            color: #2c5f7c;
+        }}
+        .help-content .contact-section {{
+            background-color: #e8f4f8;
+        }}
     </style>
 </head>
 <body>
@@ -459,6 +500,7 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
         <button onclick="showPage('reisestatistikk')">Reisestatistikk Asker sentrum</button>
         <button onclick="showPage('nokkeltall')">Reisestrømmer i Asker kommune</button>
         <button onclick="showPage('kart')">Kart</button>
+        <button onclick="showPage('hjelp')">Hjelp</button>
     </div>
 
     <div class="container">
@@ -653,6 +695,108 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
                         <li>Oversiktskart over køer</li>
                         <li>Soner og grids</li>
                     </ul>
+                </div>
+            </div>
+
+            <!-- HJELP -->
+            <div class="page" id="page-hjelp">
+                <div class="help-content">
+                    <h2>Brukerveiledning</h2>
+
+                    <section>
+                        <h3>Hva er dette dashbordet?</h3>
+                        <p>Mobilitetsdashbordet gir deg oversikt over hvordan folk reiser i Asker kommune. Her kan du se utviklingen i køer, forsinkelser og reisemønstre over tid. Dashbordet er nyttig for alle som er interessert i trafikk og mobilitet i Asker – enten du jobber med byplanlegging, er politiker, eller bare nysgjerrig på hvordan trafikken utvikler seg.</p>
+                    </section>
+
+                    <section>
+                        <h3>Slik navigerer du</h3>
+                        <p>Øverst på siden finner du en meny med følgende valg:</p>
+                        <ul>
+                            <li><strong>Hjem</strong> – Startsiden med oversikt over alle funksjoner</li>
+                            <li><strong>Forsinkelser og køer</strong> – Se køsituasjonen på veiene</li>
+                            <li><strong>Reisestatistikk Asker sentrum</strong> – Se hvor mange som reiser til og fra sentrum</li>
+                            <li><strong>Reisestrømmer i Asker kommune</strong> – Utforsk reisemønstre mellom ulike områder</li>
+                            <li><strong>Kart</strong> – Interaktivt kart over Asker</li>
+                        </ul>
+                        <p>Du kan også klikke direkte på boksene på startsiden for å komme til de ulike sidene.</p>
+                    </section>
+
+                    <section>
+                        <h3>Forsinkelser og køer</h3>
+                        <p>Her kan du se hvor mye kø det er på utvalgte strekninger i Asker, og hvor mye bussene blir forsinket.</p>
+                        <p><strong>Slik bruker du siden:</strong></p>
+                        <p>I menyen til venstre kan du velge:</p>
+                        <ol>
+                            <li><strong>Strekning</strong> – Velg en spesifikk veistrekning, eller «Alle strekninger» for å se gjennomsnittet</li>
+                            <li><strong>Visning</strong> – Velg mellom å se køindeks (minutter forsinkelse per kilometer) eller bussforsinkelser</li>
+                            <li><strong>Vis over</strong> – Velg om du vil se utviklingen over tid (dato) eller fordelt på klokkeslett</li>
+                            <li><strong>Tid på døgnet</strong> – Velg morgenrush eller ettermiddagsrush</li>
+                        </ol>
+                        <p><em>Tips: Prøv å bytte mellom «Over dato» og «Over klokkeslett» for å se når på dagen køene er verst.</em></p>
+                    </section>
+
+                    <section>
+                        <h3>Reisestatistikk Asker sentrum</h3>
+                        <p>Her ser du hvor mange reiser som går til og fra Asker sentrum, fordelt på transportmiddel.</p>
+                        <p><strong>Slik bruker du siden:</strong></p>
+                        <p>Velg en strekning i menyen til venstre. Grafen viser antall reiser per kvartal, delt opp på bil, buss, tog, sykkel og gange.</p>
+                        <p><em>Tips: Hold musepekeren over grafen for å se nøyaktige tall for hvert kvartal.</em></p>
+                    </section>
+
+                    <section>
+                        <h3>Reisestrømmer i Asker kommune</h3>
+                        <p>Her kan du utforske hvordan folk reiser mellom ulike områder i kommunen.</p>
+                        <p><strong>Slik bruker du siden:</strong></p>
+                        <p>I menyen til venstre kan du filtrere på:</p>
+                        <ol>
+                            <li><strong>Område fra</strong> – Hvor reisene starter (hold Ctrl og klikk for å velge flere)</li>
+                            <li><strong>Område til</strong> – Hvor reisene ender</li>
+                            <li><strong>Tid på dagen</strong> – Morgen, formiddag, ettermiddag, kveld eller natt</li>
+                            <li><strong>Ukedag/helg</strong> – Se forskjellen mellom hverdager og helger</li>
+                        </ol>
+                        <p>Grafen viser antall reiser per kvartal. De svake prikkene er faktiske tall, mens linjen viser trenden (glidende gjennomsnitt).</p>
+                        <p><strong>Ekstra funksjoner:</strong></p>
+                        <ul>
+                            <li><strong>Vis reisestrømmer</strong> – Når du har valgt spesifikke områder, kan du klikke på denne knappen for å se et flytdiagram som viser hvor reisene går</li>
+                            <li><strong>Eksporter CSV</strong> – Last ned dataene til Excel for videre analyse</li>
+                        </ul>
+                    </section>
+
+                    <section>
+                        <h3>Kart</h3>
+                        <p>Her finner du et interaktivt kart over Asker sentrum og omegn.</p>
+                        <p>Klikk på bildet eller knappen for å åpne kartet i en ny fane. I kartet kan du slå av og på ulike lag som viser:</p>
+                        <ul>
+                            <li>Trafikk til Asker sentrum (morgen)</li>
+                            <li>Trafikk fra Asker sentrum (ettermiddag)</li>
+                            <li>Gjennomfartstrafikk</li>
+                            <li>Oversikt over køer</li>
+                            <li>Soner og områdeinndeling</li>
+                        </ul>
+                    </section>
+
+                    <section>
+                        <h3>Ofte stilte spørsmål</h3>
+                        <p><strong>Hvor kommer dataene fra?</strong><br>
+                        Dataene er basert på mobildata og trafikkregistreringer, og oppdateres kvartalsvis.</p>
+
+                        <p><strong>Hva betyr «kø (min/km)»?</strong><br>
+                        Dette er en køindeks som viser hvor mange ekstra minutter du bruker per kilometer sammenlignet med fri flyt. Høyere tall betyr mer kø.</p>
+
+                        <p><strong>Kan jeg laste ned dataene?</strong><br>
+                        Ja, på siden «Reisestrømmer i Asker kommune» kan du klikke «Eksporter CSV» for å laste ned de filtrerte dataene.</p>
+
+                        <p><strong>Fungerer dashbordet på mobil?</strong><br>
+                        Ja, dashbordet tilpasser seg skjermstørrelsen, men det er enklest å bruke på en større skjerm.</p>
+                    </section>
+
+                    <section class="contact-section">
+                        <h3>Kontakt</h3>
+                        <p>Har du spørsmål eller tilbakemeldinger om dashbordet?</p>
+                        <p><strong>Arve Halseth</strong><br>
+                        E-post: <a href="mailto:aha@jaleas.no">aha@jaleas.no</a><br>
+                        Telefon: 99 69 86 61</p>
+                    </section>
                 </div>
             </div>
         </div>
