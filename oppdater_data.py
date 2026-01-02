@@ -16,7 +16,7 @@ client = clickhouse_connect.get_client(host='localhost', port=8123, database='as
 # Eksport av kødata
 print("Eksporterer kødata...")
 df_ko = client.query_df(
-    "SELECT dato, klokkeslett, stop_name, tid_dag, faktisk_tid, avstand, min_tid, ko_min_km, forsinkelser, bil FROM `3-05 til dashbord ko`"
+    "SELECT dato, klokkeslett, stop_name, tid_dag, faktisk_tid, avstand, normal_tid, ko_min_km, forsinkelser, bil FROM `3-05 til dashbord ko`"
 )
 df_ko.to_csv("data/inndata_asker_ko.csv", sep=";", decimal=",", index=False, encoding="utf-8-sig")
 print(f"Eksportert {len(df_ko)} rader (kødata)")

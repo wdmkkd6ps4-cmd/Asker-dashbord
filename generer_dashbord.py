@@ -95,14 +95,39 @@ def aggregate_ko_data(df):
         ).reset_index()
         agg_alle_dato = agg_alle_dato.sort_values("dato")
         agg_alle_dato["dato_str"] = agg_alle_dato["dato"].dt.strftime("%d.%m.%Y")
+        agg_alle_dato["dato_iso"] = agg_alle_dato["dato"].dt.strftime("%Y-%m-%d")
 
         key = f"Alle strekninger_{tid_dag}"
         aggregated[key] = {
             "datoer": agg_alle_dato["dato_str"].tolist(),
+            "datoer_iso": agg_alle_dato["dato_iso"].tolist(),
             "ko": [round(x, 3) if pd.notna(x) else None for x in agg_alle_dato["ko_min_km"].tolist()],
             "forsinkelser": [round(x, 3) if pd.notna(x) else None for x in agg_alle_dato["forsinkelser"].tolist()]
         }
 
+        # Klokkeslett-data med dato for filtrering (rådata per dato og klokkeslett)
+        agg_alle_klokke_dato = df_tid.groupby(["dato", "klokkeslett"]).apply(
+            lambda g: pd.Series({
+                "ko_min_km": weighted_avg_ko(g),
+                "forsinkelser": weighted_avg_forsinkelser(g)
+            }), include_groups=False
+        ).reset_index()
+        agg_alle_klokke_dato["dato_iso"] = agg_alle_klokke_dato["dato"].dt.strftime("%Y-%m-%d")
+
+        key = f"Alle strekninger_{tid_dag}_klokkeslett_raw"
+        aggregated[key] = {
+            "records": [
+                {
+                    "dato_iso": row["dato_iso"],
+                    "klokkeslett": row["klokkeslett"],
+                    "ko": round(row["ko_min_km"], 3) if pd.notna(row["ko_min_km"]) else None,
+                    "forsinkelser": round(row["forsinkelser"], 3) if pd.notna(row["forsinkelser"]) else None
+                }
+                for _, row in agg_alle_klokke_dato.iterrows()
+            ]
+        }
+
+        # Beholder også pre-aggregert for bakoverkompatibilitet
         agg_alle_klokke = df_tid.groupby("klokkeslett").apply(
             lambda g: pd.Series({
                 "ko_min_km": weighted_avg_ko(g),
@@ -126,12 +151,34 @@ def aggregate_ko_data(df):
                 "forsinkelser": "median"
             }).reset_index()
             agg = agg.sort_values("dato")
+            agg["dato_iso"] = agg["dato"].dt.strftime("%Y-%m-%d")
 
             key = f"{stop}_{tid_dag}"
             aggregated[key] = {
                 "datoer": agg["dato_str"].tolist(),
+                "datoer_iso": agg["dato_iso"].tolist(),
                 "ko": [round(x, 3) if pd.notna(x) else None for x in agg["ko_min_km"].tolist()],
                 "forsinkelser": [round(x, 3) if pd.notna(x) else None for x in agg["forsinkelser"].tolist()]
+            }
+
+            # Klokkeslett-data med dato for filtrering
+            agg_klokke_dato = df_stop.groupby(["dato", "klokkeslett"]).agg({
+                "ko_min_km": "median",
+                "forsinkelser": "median"
+            }).reset_index()
+            agg_klokke_dato["dato_iso"] = agg_klokke_dato["dato"].dt.strftime("%Y-%m-%d")
+
+            key = f"{stop}_{tid_dag}_klokkeslett_raw"
+            aggregated[key] = {
+                "records": [
+                    {
+                        "dato_iso": row["dato_iso"],
+                        "klokkeslett": row["klokkeslett"],
+                        "ko": round(row["ko_min_km"], 3) if pd.notna(row["ko_min_km"]) else None,
+                        "forsinkelser": round(row["forsinkelser"], 3) if pd.notna(row["forsinkelser"]) else None
+                    }
+                    for _, row in agg_klokke_dato.iterrows()
+                ]
             }
 
             agg_klokke = df_stop.groupby("klokkeslett").agg({
@@ -148,6 +195,37 @@ def aggregate_ko_data(df):
             }
 
     return aggregated
+
+
+def calculate_first_dates(ko_aggregated):
+    """Beregn første dato med data for kø og forsinkelser"""
+    first_ko_date = None
+    first_forsinkelser_date = None
+
+    # Sjekk alle datasett for å finne første dato med faktisk data
+    for key, data in ko_aggregated.items():
+        if '_klokkeslett' in key or 'datoer_iso' not in data:
+            continue
+
+        datoer_iso = data['datoer_iso']
+        ko_values = data['ko']
+        forsinkelser_values = data['forsinkelser']
+
+        # Finn første dato med kø-data
+        for i, (dato, ko) in enumerate(zip(datoer_iso, ko_values)):
+            if ko is not None:
+                if first_ko_date is None or dato < first_ko_date:
+                    first_ko_date = dato
+                break
+
+        # Finn første dato med forsinkelser-data
+        for i, (dato, fors) in enumerate(zip(datoer_iso, forsinkelser_values)):
+            if fors is not None:
+                if first_forsinkelser_date is None or dato < first_forsinkelser_date:
+                    first_forsinkelser_date = dato
+                break
+
+    return first_ko_date, first_forsinkelser_date
 
 
 def prepare_nokkel_data(df):
@@ -172,7 +250,7 @@ def prepare_nokkel_data(df):
     }
 
 
-def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
+def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data, first_ko_date, first_forsinkelser_date):
     """Generer HTML med embedded data og JavaScript"""
 
     strekninger_ko = ["Alle strekninger"] + sorted(ko_data["stop_name"].dropna().unique().tolist())
@@ -508,16 +586,18 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
             <h3>Velg filtre</h3>
 
             <label for="strekning-ko">Strekning</label>
-            <select id="strekning-ko" onchange="updateKoChart()">
-                {"".join(f'<option value="{s}"' + (' selected' if s == 'Alle strekninger' else '') + f'>{s}</option>' for s in strekninger_ko)}
+            <select id="strekning-ko" multiple onchange="updateKoChart()">
+                <option value="Alle strekninger" selected>Alle strekninger</option>
+                {"".join(f'<option value="{s}">{s}</option>' for s in strekninger_ko if s != 'Alle strekninger')}
             </select>
+            <div class="filter-hint">Ctrl+klikk for flervalg</div>
 
             <hr>
 
             <label>Velg visning:</label>
             <div class="radio-group">
-                <label><input type="radio" name="visning" value="ko" checked onchange="updateKoChart()"> Kø</label>
-                <label><input type="radio" name="visning" value="forsinkelser" onchange="updateKoChart()"> Forsinkelser buss</label>
+                <label><input type="radio" name="visning" value="ko" checked onchange="onVisningChange()"> Kø</label>
+                <label><input type="radio" name="visning" value="forsinkelser" onchange="onVisningChange()"> Forsinkelser buss</label>
             </div>
 
             <hr>
@@ -535,15 +615,34 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
                 <label><input type="radio" name="tid" value="Morgen" checked onchange="updateKoChart()"> Morgen</label>
                 <label><input type="radio" name="tid" value="Ettermiddag" onchange="updateKoChart()"> Ettermiddag</label>
             </div>
+
+            <hr>
+
+            <label for="startdato-ko">Fra dato</label>
+            <input type="date" id="startdato-ko" onchange="updateKoChart()">
+            <div class="filter-hint" id="startdato-hint"></div>
         </div>
 
         <div class="sidebar" id="sidebar-reisestatistikk" style="display: none;">
-            <h3>Velg strekning</h3>
+            <h3>Velg filtre</h3>
 
             <label for="strekning-reiser">Strekning</label>
             <select id="strekning-reiser" onchange="updateReiserChart()">
                 {"".join(f'<option value="{s}"' + (' selected' if s == 'Til Asker sentrum' else '') + f'>{s}</option>' for s in strekninger_reiser)}
             </select>
+
+            <hr>
+
+            <label for="transportmiddel">Transportmiddel</label>
+            <select id="transportmiddel" multiple onchange="updateReiserChart()">
+                <option value="Alle" selected>Alle</option>
+                <option value="bil">Bil</option>
+                <option value="buss">Buss</option>
+                <option value="tog">Tog</option>
+                <option value="sykkel">Sykkel</option>
+                <option value="gange">Gange</option>
+            </select>
+            <div class="filter-hint">Ctrl+klikk for flervalg</div>
         </div>
 
         <div class="sidebar" id="sidebar-nokkeltall" style="display: none;">
@@ -693,7 +792,7 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
                         <li>Gjennomfartstrafikk Syd-Nord</li>
                         <li>Gjennomfartstrafikk Syd-Vest</li>
                         <li>Oversiktskart over køer</li>
-                        <li>Soner og grids</li>
+                        <li>Soner og områdeinndeling</li>
                     </ul>
                 </div>
             </div>
@@ -808,6 +907,41 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
         const reiserData = {json.dumps(reiser_dict, ensure_ascii=False)};
         const nokkelData = {json.dumps(nokkel_data, ensure_ascii=False)};
 
+        // Første datoer med data
+        const firstKoDate = '{first_ko_date}';
+        const firstForsinkelserDate = '{first_forsinkelser_date}';
+
+        // Initialiser startdato ved sidelast
+        document.addEventListener('DOMContentLoaded', function() {{
+            initStartdatoFilter();
+        }});
+
+        function initStartdatoFilter() {{
+            const visning = document.querySelector('input[name="visning"]:checked').value;
+            const startdatoInput = document.getElementById('startdato-ko');
+            const hintEl = document.getElementById('startdato-hint');
+
+            if (visning === 'ko') {{
+                startdatoInput.min = firstKoDate;
+                startdatoInput.value = firstKoDate;
+                hintEl.textContent = 'Kø-data tilgjengelig fra ' + formatDateNorwegian(firstKoDate);
+            }} else {{
+                startdatoInput.min = firstForsinkelserDate;
+                startdatoInput.value = firstForsinkelserDate;
+                hintEl.textContent = 'Forsinkelser tilgjengelig fra ' + formatDateNorwegian(firstForsinkelserDate);
+            }}
+        }}
+
+        function onVisningChange() {{
+            initStartdatoFilter();
+            updateKoChart();
+        }}
+
+        function formatDateNorwegian(isoDate) {{
+            const parts = isoDate.split('-');
+            return parts[2] + '.' + parts[1] + '.' + parts[0];
+        }}
+
         // Navigation
         function showPage(page) {{
             document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -859,96 +993,202 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
 
         // Kø/Forsinkelser chart
         function updateKoChart() {{
-            const strekning = document.getElementById('strekning-ko').value;
+            const strekningSelect = document.getElementById('strekning-ko');
+            let valgteStrekninger = Array.from(strekningSelect.selectedOptions).map(o => o.value);
+            const alleStrekningerValgt = valgteStrekninger.includes('Alle strekninger') || valgteStrekninger.length === 0;
+
             const visning = document.querySelector('input[name="visning"]:checked').value;
             const xakse = document.querySelector('input[name="xakse"]:checked').value;
             const tid = document.querySelector('input[name="tid"]:checked').value;
+            const startdato = document.getElementById('startdato-ko').value;
 
-            let dataKey, xData, yData, xLabel, chartType;
+            const farger = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3', '#FF6692', '#B6E880'];
+            const traces = [];
+
+            // Bestem hvilke strekninger som skal vises
+            const strekningerÅVise = alleStrekningerValgt ? ['Alle strekninger'] : valgteStrekninger;
 
             if (xakse === 'dato') {{
-                dataKey = strekning + '_' + tid;
-                if (!koData[dataKey]) {{
-                    console.log('Ingen data for:', dataKey);
-                    return;
-                }}
-                xData = koData[dataKey].datoer;
-                yData = visning === 'ko' ? koData[dataKey].ko : koData[dataKey].forsinkelser;
-                xLabel = 'Dato';
-                chartType = 'scatter';
+                // Samle alle unike datoer fra alle valgte strekninger
+                const alleDatoerSet = new Set();
+                const strekningData = {{}};
+
+                strekningerÅVise.forEach(strekning => {{
+                    const dataKey = strekning + '_' + tid;
+                    if (!koData[dataKey]) return;
+
+                    const datoerIso = koData[dataKey].datoer_iso;
+                    const alleDatoer = koData[dataKey].datoer;
+                    const alleY = visning === 'ko' ? koData[dataKey].ko : koData[dataKey].forsinkelser;
+
+                    // Lag mapping fra ISO-dato til verdi
+                    const datoMap = {{}};
+                    const datoStrMap = {{}};
+                    for (let i = 0; i < datoerIso.length; i++) {{
+                        if (datoerIso[i] >= startdato) {{
+                            alleDatoerSet.add(datoerIso[i]);
+                            datoMap[datoerIso[i]] = alleY[i];
+                            datoStrMap[datoerIso[i]] = alleDatoer[i];
+                        }}
+                    }}
+                    strekningData[strekning] = {{ datoMap, datoStrMap }};
+                }});
+
+                // Sorter alle datoer
+                const sorterteDatoerIso = Array.from(alleDatoerSet).sort();
+
+                // Lag mapping fra ISO til visningsdato (bruk første tilgjengelige)
+                const isoTilVisning = {{}};
+                sorterteDatoerIso.forEach(iso => {{
+                    for (const strekning of strekningerÅVise) {{
+                        if (strekningData[strekning] && strekningData[strekning].datoStrMap[iso]) {{
+                            isoTilVisning[iso] = strekningData[strekning].datoStrMap[iso];
+                            break;
+                        }}
+                    }}
+                }});
+
+                const xDataFelles = sorterteDatoerIso.map(iso => isoTilVisning[iso]);
+
+                strekningerÅVise.forEach((strekning, idx) => {{
+                    if (!strekningData[strekning]) return;
+
+                    const datoMap = strekningData[strekning].datoMap;
+                    const yData = sorterteDatoerIso.map(iso => datoMap[iso] !== undefined ? datoMap[iso] : null);
+                    const farge = farger[idx % farger.length];
+
+                    if (visning === 'ko') {{
+                        // For kø: vis prikker + trendlinje
+                        const trend = beregnGlidendeGjennomsnitt(yData, 7);
+
+                        // Rådata som punkter (uten legend)
+                        traces.push({{
+                            x: xDataFelles,
+                            y: yData,
+                            type: 'scatter',
+                            mode: 'markers',
+                            name: strekning,
+                            marker: {{ color: farge, size: 5, opacity: 0.6 }},
+                            showlegend: false
+                        }});
+
+                        // Trendlinje (med legend)
+                        traces.push({{
+                            x: xDataFelles,
+                            y: trend,
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: strekning,
+                            line: {{ color: farge, width: 2, shape: 'spline', smoothing: 1.0 }},
+                            connectgaps: true
+                        }});
+                    }} else {{
+                        // For forsinkelser: kun linje
+                        traces.push({{
+                            x: xDataFelles,
+                            y: yData,
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: strekning,
+                            line: {{ color: farge }},
+                            connectgaps: true
+                        }});
+                    }}
+                }});
+
+                const yLabel = visning === 'ko' ? 'Kø (min/km)' : 'Forsinkelser (min)';
+                const titleStrekninger = alleStrekningerValgt ? 'alle strekninger' : strekningerÅVise.join(', ').toLowerCase();
+                const title = (visning === 'ko' ? 'Kø' : 'Forsinkelser buss') + ' - ' + titleStrekninger + ' (' + tid.toLowerCase() + ')';
+
+                const layout = {{
+                    title: title,
+                    xaxis: {{ 
+                        title: 'Dato', 
+                        tickangle: -45,
+                        type: 'category'
+                    }},
+                    yaxis: {{ title: yLabel, rangemode: 'tozero' }},
+                    hovermode: 'x unified',
+                    showlegend: !alleStrekningerValgt && strekningerÅVise.length > 1
+                }};
+
+                Plotly.newPlot('ko-chart', traces, layout, {{responsive: true}});
+
             }} else {{
-                dataKey = strekning + '_' + tid + '_klokkeslett';
-                if (!koData[dataKey]) {{
-                    console.log('Ingen data for:', dataKey);
-                    return;
-                }}
-                xData = koData[dataKey].klokkeslett;
-                yData = visning === 'ko' ? koData[dataKey].ko : koData[dataKey].forsinkelser;
-                xLabel = 'Klokkeslett';
-                chartType = 'bar';
+                // Klokkeslett-visning med datofilter
+                // Samle alle unike klokkeslett
+                const alleKlokkeslettSet = new Set();
+                const strekningKlData = {{}};
+
+                strekningerÅVise.forEach(strekning => {{
+                    const rawKey = strekning + '_' + tid + '_klokkeslett_raw';
+                    if (!koData[rawKey] || !koData[rawKey].records) return;
+
+                    // Filtrer records basert på startdato
+                    const filteredRecords = koData[rawKey].records.filter(r => r.dato_iso >= startdato);
+
+                    // Aggreger per klokkeslett
+                    const klokkeslettData = {{}};
+                    filteredRecords.forEach(r => {{
+                        const kl = r.klokkeslett;
+                        alleKlokkeslettSet.add(kl);
+                        const val = visning === 'ko' ? r.ko : r.forsinkelser;
+                        if (val !== null) {{
+                            if (!klokkeslettData[kl]) {{
+                                klokkeslettData[kl] = [];
+                            }}
+                            klokkeslettData[kl].push(val);
+                        }}
+                    }});
+
+                    strekningKlData[strekning] = klokkeslettData;
+                }});
+
+                // Sorter klokkeslett
+                const sorterteKlokkeslett = Array.from(alleKlokkeslettSet).sort();
+
+                strekningerÅVise.forEach((strekning, idx) => {{
+                    if (!strekningKlData[strekning]) return;
+
+                    const klokkeslettData = strekningKlData[strekning];
+                    const yData = sorterteKlokkeslett.map(kl => {{
+                        const vals = klokkeslettData[kl];
+                        if (!vals || vals.length === 0) return null;
+                        const sum = vals.reduce((a, b) => a + b, 0);
+                        return Math.round(sum / vals.length * 1000) / 1000;
+                    }});
+
+                    const farge = farger[idx % farger.length];
+
+                    traces.push({{
+                        x: sorterteKlokkeslett,
+                        y: yData,
+                        type: 'bar',
+                        name: strekning,
+                        marker: {{ color: farge }}
+                    }});
+                }});
+
+                const yLabel = visning === 'ko' ? 'Kø (min/km)' : 'Forsinkelser (min)';
+                const titleStrekninger = alleStrekningerValgt ? 'alle strekninger' : strekningerÅVise.join(', ').toLowerCase();
+                const title = (visning === 'ko' ? 'Kø' : 'Forsinkelser buss') + ' - ' + titleStrekninger + ' (' + tid.toLowerCase() + ')';
+
+                const layout = {{
+                    title: title,
+                    xaxis: {{ 
+                        title: 'Klokkeslett', 
+                        tickangle: -45,
+                        type: 'category'
+                    }},
+                    yaxis: {{ title: yLabel, rangemode: 'tozero' }},
+                    hovermode: 'x unified',
+                    showlegend: !alleStrekningerValgt && strekningerÅVise.length > 1,
+                    barmode: 'group'
+                }};
+
+                Plotly.newPlot('ko-chart', traces, layout, {{responsive: true}});
             }}
-
-            const yLabel = visning === 'ko' ? 'Kø (min/km)' : 'Forsinkelser (min)';
-            const title = (visning === 'ko' ? 'Kø' : 'Forsinkelser buss') + ' - ' + strekning.toLowerCase() + ' (' + tid.toLowerCase() + ')';
-
-            const trace = {{
-                x: xData,
-                y: yData,
-                type: chartType,
-                mode: chartType === 'scatter' ? 'lines' : undefined,
-                marker: {{ color: '#636EFA' }},
-                line: {{ color: '#636EFA' }}
-            }};
-
-            const layout = {{
-                title: title,
-                xaxis: {{ 
-                    title: xLabel, 
-                    tickangle: -45,
-                    type: 'category'
-                }},
-                yaxis: {{ title: yLabel, rangemode: 'tozero' }},
-                hovermode: 'x unified'
-            }};
-
-            Plotly.newPlot('ko-chart', [trace], layout, {{responsive: true}});
         }}
-
-        // Reisestatistikk chart
-        function updateReiserChart() {{
-            const strekning = document.getElementById('strekning-reiser').value;
-            const data = reiserData[strekning];
-            if (!data) return;
-
-            const colors = {{
-                'Bil': '#636EFA',
-                'Buss': '#EF553B',
-                'Sykkel': '#00CC96',
-                'Gange': '#AB63FA',
-                'Tog': '#FFA15A'
-            }};
-
-            const traces = [
-                {{ name: 'Bil', x: data.kvartaler, y: data.bil, type: 'scatter', mode: 'lines', line: {{ color: colors['Bil'] }} }},
-                {{ name: 'Buss', x: data.kvartaler, y: data.buss, type: 'scatter', mode: 'lines', line: {{ color: colors['Buss'] }} }},
-                {{ name: 'Sykkel', x: data.kvartaler, y: data.sykkel, type: 'scatter', mode: 'lines', line: {{ color: colors['Sykkel'] }} }},
-                {{ name: 'Gange', x: data.kvartaler, y: data.gange, type: 'scatter', mode: 'lines', line: {{ color: colors['Gange'] }} }},
-                {{ name: 'Tog', x: data.kvartaler, y: data.tog, type: 'scatter', mode: 'lines', line: {{ color: colors['Tog'] }} }}
-            ];
-
-            const layout = {{
-                title: 'Reisestatistikk - ' + strekning + ' (1000 reiser per kvartal)',
-                xaxis: {{ title: 'Kvartal', tickangle: -45, type: 'category' }},
-                yaxis: {{ title: 'Antall reiser (1000 per kvartal)', rangemode: 'tozero' }},
-                hovermode: 'x unified',
-                legend: {{ title: {{ text: 'Transportmiddel' }} }}
-            }};
-
-            Plotly.newPlot('reiser-chart', traces, layout, {{responsive: true}});
-        }}
-
-        // Global variabel for CSV-eksport
-        let csvExportData = [];
 
         // Funksjon for å beregne sentrert glidende gjennomsnitt
         function beregnGlidendeGjennomsnitt(values, windowSize) {{
@@ -980,6 +1220,96 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
 
             return result;
         }}
+
+        // Reisestatistikk chart
+        function updateReiserChart() {{
+            const strekning = document.getElementById('strekning-reiser').value;
+            const data = reiserData[strekning];
+            if (!data) return;
+
+            const transportmiddelSelect = document.getElementById('transportmiddel');
+            let valgteModi = Array.from(transportmiddelSelect.selectedOptions).map(o => o.value);
+            const alleValgt = valgteModi.includes('Alle') || valgteModi.length === 0;
+
+            const colors = {{
+                'bil': '#636EFA',
+                'buss': '#EF553B',
+                'sykkel': '#00CC96',
+                'gange': '#AB63FA',
+                'tog': '#FFA15A'
+            }};
+
+            const labels = {{
+                'bil': 'Bil',
+                'buss': 'Buss',
+                'sykkel': 'Sykkel',
+                'gange': 'Gange',
+                'tog': 'Tog'
+            }};
+
+            const alleModi = ['bil', 'buss', 'tog', 'sykkel', 'gange'];
+            const traces = [];
+
+            if (alleValgt) {{
+                // Vis kun trendlinjer for alle transportmidler
+                alleModi.forEach(mode => {{
+                    const trend = beregnGlidendeGjennomsnitt(data[mode], 5);
+                    traces.push({{
+                        name: labels[mode],
+                        x: data.kvartaler,
+                        y: trend,
+                        type: 'scatter',
+                        mode: 'lines',
+                        line: {{ color: colors[mode], width: 2, shape: 'spline', smoothing: 1.0 }},
+                        connectgaps: true
+                    }});
+                }});
+            }} else {{
+                // Vis rådata som prikker + trendlinje for valgte modi
+                valgteModi.forEach(mode => {{
+                    if (mode === 'Alle') return;
+
+                    const trend = beregnGlidendeGjennomsnitt(data[mode], 5);
+
+                    // Rådata som punkter (uten legend)
+                    traces.push({{
+                        name: labels[mode],
+                        x: data.kvartaler,
+                        y: data[mode],
+                        type: 'scatter',
+                        mode: 'markers',
+                        marker: {{ color: colors[mode], size: 5, opacity: 0.6 }},
+                        showlegend: false
+                    }});
+
+                    // Trendlinje (med legend)
+                    traces.push({{
+                        name: labels[mode],
+                        x: data.kvartaler,
+                        y: trend,
+                        type: 'scatter',
+                        mode: 'lines',
+                        line: {{ color: colors[mode], width: 2, shape: 'spline', smoothing: 1.0 }},
+                        connectgaps: true
+                    }});
+                }});
+            }}
+
+            const titleSuffix = alleValgt ? ' - trend' : ' - ' + valgteModi.filter(m => m !== 'Alle').map(m => labels[m]).join(', ');
+
+            const layout = {{
+                title: 'Reisestatistikk - ' + strekning + titleSuffix + ' (1000 reiser per kvartal)',
+                xaxis: {{ title: 'Kvartal', tickangle: -45, type: 'category' }},
+                yaxis: {{ title: 'Antall reiser (1000 per kvartal)', rangemode: 'tozero' }},
+                hovermode: 'x unified',
+                legend: {{ title: {{ text: 'Transportmiddel' }} }}
+            }};
+
+            Plotly.newPlot('reiser-chart', traces, layout, {{responsive: true}});
+        }}
+
+        // Global variabel for CSV-eksport
+        let csvExportData = [];
 
         // Nøkkeltall reiser chart
         function updateNokkelChart() {{
@@ -1054,7 +1384,7 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
                         type: 'scatter',
                         mode: 'markers',
                         name: omrade,
-                        marker: {{ color: farge, size: 8, opacity: 0.6 }},
+                        marker: {{ color: farge, size: 5, opacity: 0.6 }},
                         showlegend: false
                     }});
 
@@ -1110,7 +1440,7 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
                         type: 'scatter',
                         mode: 'markers',
                         name: omrade,
-                        marker: {{ color: farge, size: 8, opacity: 0.6 }},
+                        marker: {{ color: farge, size: 5, opacity: 0.6 }},
                         showlegend: false
                     }});
 
@@ -1159,7 +1489,7 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data):
                     type: 'scatter',
                     mode: 'markers',
                     name: 'Rådata',
-                    marker: {{ color: '#636EFA', size: 8, opacity: 0.6 }},
+                    marker: {{ color: '#636EFA', size: 5, opacity: 0.6 }},
                     showlegend: false
                 }});
 
@@ -1419,8 +1749,13 @@ def main():
     ko_aggregated = aggregate_ko_data(ko_data)
     print(f"  - {len(ko_aggregated)} datasett generert")
 
+    print("\nBeregner første datoer...")
+    first_ko_date, first_forsinkelser_date = calculate_first_dates(ko_aggregated)
+    print(f"  - Første kø-dato: {first_ko_date}")
+    print(f"  - Første forsinkelser-dato: {first_forsinkelser_date}")
+
     print("\nGenererer HTML...")
-    html = generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data)
+    html = generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data, first_ko_date, first_forsinkelser_date)
 
     import os
     os.makedirs("docs", exist_ok=True)
