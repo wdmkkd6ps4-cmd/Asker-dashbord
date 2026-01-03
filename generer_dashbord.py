@@ -58,6 +58,7 @@ def load_and_process_nokkel_data(filepath):
     df["delomrade_til"] = df["delomrade_til"].astype(str).str.strip()
 
     df["reiser"] = pd.to_numeric(df["reiser"], errors="coerce")
+    df["co2_tonn"] = pd.to_numeric(df["co2_tonn"], errors="coerce")
 
     # Lag sorteringsnøkkel for kvartal
     df["kvartal_sort"] = df["kvartal"].str.replace("-", "").astype(int)
@@ -238,7 +239,8 @@ def prepare_nokkel_data(df):
 
     # Konverter hele datasettet til liste av dicts for JavaScript (uten trend - beregnes i JS)
     records = df[
-        ["delomrade_fra", "delomrade_til", "kvartal", "reiser", "time_of_day", "weekday_indicator"]].to_dict(
+        ["delomrade_fra", "delomrade_til", "kvartal", "reiser", "co2_tonn", "time_of_day",
+         "weekday_indicator"]].to_dict(
         "records")
 
     return {
@@ -659,6 +661,15 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data, first_ko_dat
                 {omrade_til_options}
             </select>
             <div class="filter-hint">Ctrl+klikk for flervalg</div>
+
+            <hr>
+
+            <label>Vis:</label>
+            <div class="radio-group">
+                <label><input type="radio" name="visning-nokkel" value="reiser" checked onchange="updateNokkelChart()"> Reiser</label>
+                <label><input type="radio" name="visning-nokkel" value="co2_sum" onchange="updateNokkelChart()"> CO2-utslipp (sum)</label>
+                <label><input type="radio" name="visning-nokkel" value="co2_per_reise" onchange="updateNokkelChart()"> CO2 per reise</label>
+            </div>
 
             <hr>
 
@@ -1317,6 +1328,7 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data, first_ko_dat
             const omradeTilSelect = document.getElementById('omrade-til');
             const tidNokkel = document.querySelector('input[name="tid-nokkel"]:checked').value;
             const ukedagNokkel = document.querySelector('input[name="ukedag-nokkel"]:checked').value;
+            const visningNokkel = document.querySelector("input[name='visning-nokkel']:checked").value;
 
             // Hent valgte områder (rå valg fra dropdown)
             let fraValg = Array.from(omradeFraSelect.selectedOptions).map(o => o.value);
@@ -1360,17 +1372,34 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data, first_ko_dat
                 splitOmrader.forEach((omrade, idx) => {{
                     const omradeFiltered = filtered.filter(r => r.delomrade_fra === omrade);
 
-                    // Aggreger per kvartal
-                    const kvartalSum = {{}};
+                    // Aggreger per kvartal - summer både reiser og CO2
+                    const kvartalData = {{}};
                     omradeFiltered.forEach(r => {{
-                        if (!kvartalSum[r.kvartal]) {{
-                            kvartalSum[r.kvartal] = 0;
+                        if (!kvartalData[r.kvartal]) {{
+                            kvartalData[r.kvartal] = {{ reiser: 0, co2: 0 }};
                         }}
-                        kvartalSum[r.kvartal] += r.reiser || 0;
+                        kvartalData[r.kvartal].reiser += r.reiser || 0;
+                        kvartalData[r.kvartal].co2 += r.co2_tonn || 0;
                     }});
 
-                    const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalSum[k] !== undefined);
-                    const yValues = sortedKvartaler.map(k => Math.round(kvartalSum[k] * 100) / 100);
+                    const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalData[k] !== undefined);
+
+                    // Velg y-verdier basert på visning
+                    let yValues;
+                    if (visningNokkel === 'co2_per_reise') {{
+                        // CO2 per reise (tonn / 1000 reiser = kg per reise)
+                        yValues = sortedKvartaler.map(k => {{
+                            const d = kvartalData[k];
+                            if (d.reiser > 0) {{
+                                return Math.round(d.co2 / d.reiser * 100) / 100;
+                            }}
+                            return null;
+                        }});
+                    }} else if (visningNokkel === 'co2_sum') {{
+                        yValues = sortedKvartaler.map(k => Math.round(kvartalData[k].co2 * 100) / 100);
+                    }} else {{
+                        yValues = sortedKvartaler.map(k => Math.round(kvartalData[k].reiser * 100) / 100);
+                    }}
 
                     // Beregn trend ETTER aggregering
                     const trendValues = beregnGlidendeGjennomsnitt(yValues, 5);
@@ -1399,15 +1428,25 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data, first_ko_dat
                         connectgaps: true
                     }});
 
-                    // Lagre for CSV
+                    // Lagre for CSV - inkluder både reiser og CO2
                     const tilOmraderTekst = tilAlleValgt ? 'Alle' : tilValg.join(', ');
                     sortedKvartaler.forEach((k, i) => {{
+                        const d = kvartalData[k];
+                        const reiserTrend = beregnGlidendeGjennomsnitt(sortedKvartaler.map(kv => Math.round(kvartalData[kv].reiser * 100) / 100), 5);
+                        const co2PerReise = d.reiser > 0 ? Math.round(d.co2 / d.reiser * 100) / 100 : null;
+                        const co2PerReiseTrend = beregnGlidendeGjennomsnitt(sortedKvartaler.map(kv => {{
+                            const kd = kvartalData[kv];
+                            return kd.reiser > 0 ? Math.round(kd.co2 / kd.reiser * 100) / 100 : null;
+                        }}), 5);
                         csvExportData.push({{
                             område_fra: omrade,
                             område_til: tilOmraderTekst,
                             kvartal: k,
-                            rådata: yValues[i],
-                            trend: trendValues[i]
+                            reiser: Math.round(d.reiser * 100) / 100,
+                            reiser_trend: reiserTrend[i],
+                            co2_tonn: Math.round(d.co2 * 100) / 100,
+                            co2_per_reise: co2PerReise,
+                            co2_per_reise_trend: co2PerReiseTrend[i]
                         }});
                     }});
                 }});
@@ -1417,16 +1456,32 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data, first_ko_dat
                     const omradeFiltered = filtered.filter(r => r.delomrade_til === omrade);
 
                     // Aggreger per kvartal
-                    const kvartalSum = {{}};
+                    const kvartalData = {{}};
                     omradeFiltered.forEach(r => {{
-                        if (!kvartalSum[r.kvartal]) {{
-                            kvartalSum[r.kvartal] = 0;
+                        if (!kvartalData[r.kvartal]) {{
+                            kvartalData[r.kvartal] = {{ reiser: 0, co2: 0 }};
                         }}
-                        kvartalSum[r.kvartal] += r.reiser || 0;
+                        kvartalData[r.kvartal].reiser += r.reiser || 0;
+                        kvartalData[r.kvartal].co2 += r.co2_tonn || 0;
                     }});
 
-                    const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalSum[k] !== undefined);
-                    const yValues = sortedKvartaler.map(k => Math.round(kvartalSum[k] * 100) / 100);
+                    const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalData[k] !== undefined);
+
+                    // Velg y-verdier basert på visning
+                    let yValues;
+                    if (visningNokkel === 'co2_per_reise') {{
+                        yValues = sortedKvartaler.map(k => {{
+                            const d = kvartalData[k];
+                            if (d.reiser > 0) {{
+                                return Math.round(d.co2 / d.reiser * 100) / 100;
+                            }}
+                            return null;
+                        }});
+                    }} else if (visningNokkel === 'co2_sum') {{
+                        yValues = sortedKvartaler.map(k => Math.round(kvartalData[k].co2 * 100) / 100);
+                    }} else {{
+                        yValues = sortedKvartaler.map(k => Math.round(kvartalData[k].reiser * 100) / 100);
+                    }}
 
                     // Beregn trend ETTER aggregering
                     const trendValues = beregnGlidendeGjennomsnitt(yValues, 5);
@@ -1458,27 +1513,53 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data, first_ko_dat
                     // Lagre for CSV
                     const fraOmraderTekst = fraAlleValgt ? 'Alle' : fraValg.join(', ');
                     sortedKvartaler.forEach((k, i) => {{
+                        const d = kvartalData[k];
+                        const reiserTrend = beregnGlidendeGjennomsnitt(sortedKvartaler.map(kv => Math.round(kvartalData[kv].reiser * 100) / 100), 5);
+                        const co2PerReise = d.reiser > 0 ? Math.round(d.co2 / d.reiser * 100) / 100 : null;
+                        const co2PerReiseTrend = beregnGlidendeGjennomsnitt(sortedKvartaler.map(kv => {{
+                            const kd = kvartalData[kv];
+                            return kd.reiser > 0 ? Math.round(kd.co2 / kd.reiser * 100) / 100 : null;
+                        }}), 5);
                         csvExportData.push({{
                             område_fra: fraOmraderTekst,
                             område_til: omrade,
                             kvartal: k,
-                            rådata: yValues[i],
-                            trend: trendValues[i]
+                            reiser: Math.round(d.reiser * 100) / 100,
+                            reiser_trend: reiserTrend[i],
+                            co2_tonn: Math.round(d.co2 * 100) / 100,
+                            co2_per_reise: co2PerReise,
+                            co2_per_reise_trend: co2PerReiseTrend[i]
                         }});
                     }});
                 }});
             }} else {{
                 // Én samlet linje
-                const kvartalSum = {{}};
+                const kvartalData = {{}};
                 filtered.forEach(r => {{
-                    if (!kvartalSum[r.kvartal]) {{
-                        kvartalSum[r.kvartal] = 0;
+                    if (!kvartalData[r.kvartal]) {{
+                        kvartalData[r.kvartal] = {{ reiser: 0, co2: 0 }};
                     }}
-                    kvartalSum[r.kvartal] += r.reiser || 0;
+                    kvartalData[r.kvartal].reiser += r.reiser || 0;
+                    kvartalData[r.kvartal].co2 += r.co2_tonn || 0;
                 }});
 
-                const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalSum[k] !== undefined);
-                const yValues = sortedKvartaler.map(k => Math.round(kvartalSum[k] * 100) / 100);
+                const sortedKvartaler = nokkelData.kvartaler.filter(k => kvartalData[k] !== undefined);
+
+                // Velg y-verdier basert på visning
+                let yValues;
+                if (visningNokkel === 'co2_per_reise') {{
+                    yValues = sortedKvartaler.map(k => {{
+                        const d = kvartalData[k];
+                        if (d.reiser > 0) {{
+                            return Math.round(d.co2 / d.reiser * 100) / 100;
+                        }}
+                        return null;
+                    }});
+                }} else if (visningNokkel === 'co2_sum') {{
+                    yValues = sortedKvartaler.map(k => Math.round(kvartalData[k].co2 * 100) / 100);
+                }} else {{
+                    yValues = sortedKvartaler.map(k => Math.round(kvartalData[k].reiser * 100) / 100);
+                }}
 
                 // Beregn trend ETTER aggregering
                 const trendValues = beregnGlidendeGjennomsnitt(yValues, 5);
@@ -1506,30 +1587,55 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data, first_ko_dat
                 // Lagre for CSV
                 const fraOmraderTekst = fraAlleValgt ? 'Alle' : fraValg.join(', ');
                 const tilOmraderTekst = tilAlleValgt ? 'Alle' : tilValg.join(', ');
+                const reiserValues = sortedKvartaler.map(k => Math.round(kvartalData[k].reiser * 100) / 100);
+                const reiserTrend = beregnGlidendeGjennomsnitt(reiserValues, 5);
+                const co2PerReiseValues = sortedKvartaler.map(k => {{
+                    const d = kvartalData[k];
+                    return d.reiser > 0 ? Math.round(d.co2 / d.reiser * 100) / 100 : null;
+                }});
+                const co2PerReiseTrend = beregnGlidendeGjennomsnitt(co2PerReiseValues, 5);
+
                 sortedKvartaler.forEach((k, i) => {{
+                    const d = kvartalData[k];
                     csvExportData.push({{
                         område_fra: fraOmraderTekst,
                         område_til: tilOmraderTekst,
                         kvartal: k,
-                        rådata: yValues[i],
-                        trend: trendValues[i]
+                        reiser: reiserValues[i],
+                        reiser_trend: reiserTrend[i],
+                        co2_tonn: Math.round(d.co2 * 100) / 100,
+                        co2_per_reise: co2PerReiseValues[i],
+                        co2_per_reise_trend: co2PerReiseTrend[i]
                     }});
                 }});
             }}
 
+            // Dynamisk tittel og y-akse basert på visning
+            let titleText, yAxisLabel;
+            if (visningNokkel === 'co2_per_reise') {{
+                titleText = 'CO2-utslipp per reise i Asker kommune';
+                yAxisLabel = 'CO2 (kg per reise)';
+            }} else if (visningNokkel === 'co2_sum') {{
+                titleText = 'CO2-utslipp i Asker kommune - sum per kvartal';
+                yAxisLabel = 'CO2 (tonn per kvartal)';
+            }} else {{
+                titleText = 'Reisestrømmer i Asker kommune - sum reiser per kvartal';
+                yAxisLabel = 'Antall reiser (1000 per kvartal)';
+            }}
+
             const layout = {{
-                title: 'Reisestrømmer i Asker kommune - sum reiser per kvartal',
+                title: titleText,
                 xaxis: {{ title: 'Kvartal', tickangle: -45, type: 'category' }},
-                yaxis: {{ title: 'Antall reiser (1000 per kvartal)', rangemode: 'tozero' }},
+                yaxis: {{ title: yAxisLabel, rangemode: 'tozero' }},
                 hovermode: 'x unified',
                 legend: {{ x: 0, y: 1.15, orientation: 'h' }}
             }};
 
             Plotly.newPlot('nokkel-chart', traces, layout, {{responsive: true}});
 
-            // Vis/skjul sankey-knapp basert på filter
+            // Vis/skjul sankey-knapp basert på filter (kun for reiser, ikke CO2)
             const sankeyBtn = document.getElementById('sankey-btn');
-            if (fraAlleValgt && tilAlleValgt) {{
+            if ((fraAlleValgt && tilAlleValgt) || visningNokkel === 'co2_sum' || visningNokkel === 'co2_per_reise') {{
                 sankeyBtn.style.display = 'none';
             }} else {{
                 sankeyBtn.style.display = 'inline-block';
@@ -1543,16 +1649,19 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data, first_ko_dat
                 return;
             }}
 
-            // Lag CSV-innhold
-            const headers = ['Område fra', 'Område til', 'Kvartal', 'Rådata', 'Trend'];
+            // Header med alle kolonner
+            const headers = ['Område fra', 'Område til', 'Kvartal', 'Reiser (1000)', 'Reiser trend', 'CO2 (tonn)', 'CO2 per reise (kg)', 'CO2 per reise trend'];
             const csvContent = [
                 headers.join(';'),
                 ...csvExportData.map(row => [
                     row.område_fra,
                     row.område_til,
                     row.kvartal,
-                    row.rådata != null ? String(row.rådata).replace('.', ',') : '',
-                    row.trend != null ? String(row.trend).replace('.', ',') : ''
+                    row.reiser != null ? String(row.reiser).replace('.', ',') : '',
+                    row.reiser_trend != null ? String(row.reiser_trend).replace('.', ',') : '',
+                    row.co2_tonn != null ? String(row.co2_tonn).replace('.', ',') : '',
+                    row.co2_per_reise != null ? String(row.co2_per_reise).replace('.', ',') : '',
+                    row.co2_per_reise_trend != null ? String(row.co2_per_reise_trend).replace('.', ',') : ''
                 ].join(';'))
             ].join('\\n');
 
