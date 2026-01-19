@@ -1094,15 +1094,19 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data, first_ko_dat
                             connectgaps: true
                         }});
                     }} else {{
-                        // For forsinkelser: kun linje
+                        // For forsinkelser: kun punkter (sirkler)
                         traces.push({{
                             x: xDataFelles,
                             y: yData,
                             type: 'scatter',
-                            mode: 'lines',
+                            mode: 'markers',
                             name: strekning,
-                            line: {{ color: farge }},
-                            connectgaps: true
+                            marker: {{ 
+                                color: farge, 
+                                size: 8, 
+                                symbol: 'circle',
+                                opacity: 0.7
+                            }}
                         }});
                     }}
                 }});
