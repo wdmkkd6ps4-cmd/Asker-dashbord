@@ -24,7 +24,7 @@ print(f"Eksportert {len(df_ko)} rader (kødata)")
 # Eksport av reisestatistikk
 print("Eksporterer reisestatistikk...")
 df_reiser = client.query_df(
-    "SELECT ID, kvartal, bil, buss, sykkel, gange, tog FROM `3-05 til dashbord reiser`"
+    "SELECT id, kvartal, bil, buss, sykkel, gange, tog FROM `3-05 til dashbord reiser` where kvartal>'2019-1'"
 )
 df_reiser.to_csv("data/inndata_asker_reiser.csv", sep=";", decimal=",", index=False, encoding="utf-8-sig")
 print(f"Eksportert {len(df_reiser)} rader (reisestatistikk)")

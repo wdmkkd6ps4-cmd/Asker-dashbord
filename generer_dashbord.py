@@ -256,12 +256,12 @@ def generate_html(ko_data, reiser_data, ko_aggregated, nokkel_data, first_ko_dat
     """Generer HTML med embedded data og JavaScript"""
 
     strekninger_ko = ["Alle strekninger"] + sorted(ko_data["stop_name"].dropna().unique().tolist())
-    strekninger_reiser = sorted(reiser_data["ID"].unique().tolist())
+    strekninger_reiser = sorted(reiser_data["id"].unique().tolist())
 
     # Forbered reisedata som dict
     reiser_dict = {}
     for strekning in strekninger_reiser:
-        df_s = reiser_data[reiser_data["ID"] == strekning].sort_values("kvartal_sort")
+        df_s = reiser_data[reiser_data["id"] == strekning].sort_values("kvartal_sort")
         reiser_dict[strekning] = {
             "kvartaler": df_s["kvartal"].tolist(),
             "bil": [round(x, 2) if pd.notna(x) else None for x in df_s["bil"].tolist()],

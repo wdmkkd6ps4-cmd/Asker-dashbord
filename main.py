@@ -360,7 +360,7 @@ def page_reisestatistikk():
         return
 
     # Hent unike ID-verdier dynamisk fra dataene
-    alle_id = sorted(df["ID"].unique().tolist())
+    alle_id = sorted(df["id"].unique().tolist())
 
     # Finn default-indeks for "Til Asker sentrum"
     default_id = "Til Asker sentrum"
@@ -380,8 +380,8 @@ def page_reisestatistikk():
             key="reisestatistikk_id"
         )
 
-    # Filtrer data på valgt ID
-    df_filtered = df[df["ID"] == valgt_id].copy()
+    # Filtrer data på valgt id
+    df_filtered = df[df["id"] == valgt_id].copy()
 
     if len(df_filtered) == 0:
         st.warning("Ingen data tilgjengelig for valgt strekning.")
